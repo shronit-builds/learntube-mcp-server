@@ -5,26 +5,15 @@
 A system that measures and improves your AI skills while you work. It runs inside Claude Desktop (via MCP) and tracks your performance across 8 abilities as you use AI for real tasks.
 
 **Two parts:**
-1. **MCP Server** — runs inside Claude Desktop, adds 5 tools (save, elevate, prove, sharpen, connect)
-2. **Companion Dashboard** — open `dashboard.html` in your browser to see your profile grow
+1. **MCP Server** — a remote server that adds 5 tools to Claude Desktop (save, elevate, prove, sharpen, connect)
+2. **Companion Dashboard** — a web app to see your profile grow
 
 ---
 
-## Step 1: Install the MCP Server (5 minutes)
+## Step 1: Connect the MCP Server (2 minutes)
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) v18+ installed
 - [Claude Desktop](https://claude.ai/download) installed
-
-### Install
-
-```bash
-# 1. Navigate to where you downloaded this folder
-cd learntube-mcp-server
-
-# 2. Install dependencies
-npm install
-```
 
 ### Configure Claude Desktop
 
@@ -32,25 +21,19 @@ Open Claude Desktop's config file:
 - **Mac**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
-Add this inside the `"mcpServers"` object (create it if it doesn't exist):
+Add this inside the `"mcpServers"` object:
 
 ```json
 {
   "mcpServers": {
     "learntube-ai-readiness": {
-      "command": "node",
-      "args": ["/FULL/PATH/TO/learntube-mcp-server/src/index.js"],
-      "env": {
-        "SUPABASE_URL": "https://ctindecnqexjzwteigff.supabase.co",
-        "SUPABASE_SERVICE_KEY": "YOUR_KEY_HERE",
-        "DEFAULT_USER_ID": "your-name"
-      }
+      "url": "https://coaching-mcp-v2-production-4a72.up.railway.app/sse"
     }
   }
 }
 ```
 
-**Important:** Replace `/FULL/PATH/TO/` with the actual absolute path to the folder on your machine. Replace `your-name` with a short, unique user ID (e.g., `shronit`, `priya`, `alex`).
+That's it. No local install needed.
 
 ### Restart Claude Desktop
 
@@ -60,9 +43,9 @@ Quit and reopen Claude Desktop. You should see a hammer icon with "5 tools" in t
 
 ## Step 2: Open the Dashboard
 
-Open `learntube-companion/dashboard.html` in your browser. That's it — no server needed.
+Visit: **[https://shronit-builds.github.io/learntube-dashboard/](https://shronit-builds.github.io/learntube-dashboard/)**
 
-Enter your user ID (the same one from `DEFAULT_USER_ID`) and hit Load. The dashboard auto-refreshes from the live database.
+Enter your user ID and hit Load. The dashboard auto-refreshes from the live database.
 
 **Tip:** Bookmark it. After every Claude session, check the dashboard to see your profile update.
 
@@ -107,7 +90,22 @@ Just use Claude normally for your real work. The tools will appear naturally:
 
 ---
 
+## Deployed URLs
+
+| Service | URL |
+|---|---|
+| MCP Server (SSE) | `https://coaching-mcp-v2-production-4a72.up.railway.app/sse` |
+| Health Check | `https://coaching-mcp-v2-production-4a72.up.railway.app/health` |
+| Dashboard | `https://shronit-builds.github.io/learntube-dashboard/` |
+| MCP GitHub Repo | `https://github.com/shronit-builds/learntube-mcp-server` |
+| Dashboard GitHub Repo | `https://github.com/shronit-builds/learntube-dashboard` |
+
+---
+
 ## FAQ
+
+**Do I need to install anything locally?**
+No. The MCP server runs remotely. Just paste the URL into your Claude Desktop config.
 
 **Do I need to remember to use the tools?**
 No. Claude will suggest them naturally during conversation when relevant. You can also ask directly: "Can you elevate this session?" or "Save that insight."

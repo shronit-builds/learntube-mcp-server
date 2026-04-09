@@ -42,9 +42,23 @@ import {
   checkMilestone,
 } from "./framework.js";
 
-// For now, derive userId from a header or env. In production, this comes from auth.
-function getUserId(extra) {
-  return extra?.userId || process.env.DEFAULT_USER_ID || "demo-user";
+// Derive userId from tool args first, then extra metadata, then env fallback.
+// In MCP, args.user_id is the primary source — Claude asks the user's name
+// and passes it with every tool call.
+let _sessionUserId = null; // Cache within a session after connect sets it
+
+function getUserId(extra, args) {
+  // 1. Explicit user_id in tool args (highest priority)
+  if (args?.user_id) {
+    _sessionUserId = args.user_id.toLowerCase().trim();
+    return _sessionUserId;
+  }
+  // 2. Session cache (set by connect)
+  if (_sessionUserId) return _sessionUserId;
+  // 3. Extra metadata from MCP client
+  if (extra?.userId) return extra.userId;
+  // 4. Env fallback
+  return process.env.DEFAULT_USER_ID || "demo-user";
 }
 
 // ─── SAVE ────────────────────────────────────────────────
@@ -53,7 +67,7 @@ function getUserId(extra) {
 // Also creates a flash card in the learning queue for the companion app.
 
 export async function handleSave(args, extra) {
-  const userId = getUserId(extra);
+  const userId = getUserId(extra, args);
 
   try {
     const save = await createSave({
@@ -118,11 +132,18 @@ export async function handleSave(args, extra) {
     // ── Flash Card for Companion App ──────────────────
     // Every save becomes a learning queue item the user can review later
     try {
+      // Generate a flash card that tests application, not just recall.
+      // Use the insight itself to derive a question about when/how to apply it.
+      const insightPreview = args.insight.substring(0, 80);
+      const flashFront = args.context
+        ? `You were working on ${args.context.substring(0, 60)}. What was the key technique you discovered that you'd use again?`
+        : args.insight.length > 40
+          ? `When would you apply this approach: "${insightPreview}..."?`
+          : `How would you apply this in your next ${args.domain} task: "${insightPreview}"?`;
+
       await createLearningQueueItem(userId, {
         type: "flash_card",
-        front: args.context
-          ? `What technique or insight did you discover while working on: ${args.context}?`
-          : `What's the key insight about ${args.tags.slice(0, 2).join(" and ")}?`,
+        front: flashFront,
         back: args.insight,
         sourceTool: "save",
         sourceId: save.id,
@@ -195,7 +216,7 @@ export async function handleSave(args, extra) {
 // Chains to sharpen for the weakest ability observed.
 
 export async function handleElevate(args, extra) {
-  const userId = getUserId(extra);
+  const userId = getUserId(extra, args);
 
   try {
     // Record the evaluation
@@ -351,7 +372,7 @@ export async function handleElevate(args, extra) {
 // Wrong answers generate learning queue items for the companion app.
 
 export async function handleProve(args, extra) {
-  const userId = getUserId(extra);
+  const userId = getUserId(extra, args);
 
   try {
     const result = await recordProveResult(userId, {
@@ -533,7 +554,7 @@ export async function handleProve(args, extra) {
 // Celebration on threshold crossing (Fogg). Queues to companion app if skipped.
 
 export async function handleSharpen(args, extra) {
-  const userId = getUserId(extra);
+  const userId = getUserId(extra, args);
 
   try {
     const ability = ABILITIES[args.target_ability];
@@ -714,7 +735,7 @@ export async function handleSharpen(args, extra) {
 // Returns the "mirror moment" — identity, proof score, decay signals.
 
 export async function handleConnect(args, extra) {
-  const userId = getUserId(extra);
+  const userId = getUserId(extra, args);
 
   try {
     switch (args.query_type) {
@@ -856,9 +877,24 @@ export async function handleConnect(args, extra) {
       }
 
       case "streak_status": {
-        const userScore = await getUserScore(userId);
-        const saveCount = await getSaveCount(userId);
+        let userScore = await getUserScore(userId);
+        const isNewUser = !userScore;
 
+        // ── Bootstrap new users ───────────────────────
+        // Create a user_scores record so all tools work from first session
+        if (isNewUser) {
+          userScore = await upsertUserScore(userId, {
+            tier: "Explorer",
+            level: 0,
+            abilities: {},
+            streakDays: 0,
+            totalSaves: 0,
+            totalElevates: 0,
+            totalProves: 0,
+          });
+        }
+
+        const saveCount = await getSaveCount(userId);
         const level = userScore?.level || 0;
         const levelInfo = LEVELS[level];
         const streak = userScore?.streak_days || 0;
@@ -867,7 +903,6 @@ export async function handleConnect(args, extra) {
         const nextBandInfo = getNextBandDistance(proofScore);
 
         // ── Ability Decay Detection ───────────────────
-        // Find abilities that haven't been exercised in 3+ days (spaced repetition nudge)
         const abilities = userScore?.abilities || {};
         const now = new Date();
         const decayingAbilities = [];
@@ -898,7 +933,7 @@ export async function handleConnect(args, extra) {
           }
         }
 
-        // Find strongest and weakest for the greeting
+        // Find strongest and weakest
         const abilityEntries = Object.entries(abilitySnapshot);
         let strongest = null;
         let weakest = null;
@@ -925,12 +960,24 @@ export async function handleConnect(args, extra) {
           .map((p) => (p.correct ? "🟩" : "🟥"))
           .join("");
 
+        // ── Last Elevate Date ─────────────────────────
+        // So Claude knows whether to offer elevate this session
+        const elevateHistory = await getAbilityProgress(userId);
+        const lastElevate = elevateHistory.length > 0
+          ? elevateHistory[elevateHistory.length - 1]
+          : null;
+        const lastElevateDate = lastElevate?.created_at || null;
+        const daysSinceElevate = lastElevateDate
+          ? Math.floor((now - new Date(lastElevateDate)) / (1000 * 60 * 60 * 24))
+          : null;
+
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify(
                 {
+                  isNewUser,
                   greeting: {
                     level,
                     levelName: levelInfo?.name || "Non-User",
@@ -952,6 +999,8 @@ export async function handleConnect(args, extra) {
                     totalElevates: userScore?.total_elevates || 0,
                     totalProves: userScore?.total_proves || 0,
                     weeklyProves: weeklyProveEmoji || null,
+                    lastElevateDate,
+                    daysSinceElevate,
                   },
                   abilities: abilitySnapshot,
                   companionApp: {
@@ -961,8 +1010,9 @@ export async function handleConnect(args, extra) {
                         ? `${queueCount} items waiting in your companion app.`
                         : null,
                   },
-                  instructions:
-                    "Present this as a warm, conversational 2-3 sentence greeting. Include: level name + tier, Proof Score with distance to next band, strongest ability, and any decaying abilities. If streak > 1, mention it. Then ask what they're working on today.",
+                  instructions: isNewUser
+                    ? "This is a NEW user — their first session ever. Welcome them warmly: 'Welcome to LearnTube AI Readiness! I'll be tracking how you use AI and helping you level up. Let's start — what are you working on today?' Do NOT recite stats or scores to a new user."
+                    : "Present this as a warm, conversational 2-3 sentence greeting. Include: level name + tier, Proof Score with distance to next band, strongest ability, and any decaying abilities. If streak > 1, mention it. If daysSinceElevate > 3 or is null, consider offering an elevate after substantive work this session. Then ask what they're working on today.",
                 },
                 null,
                 2

@@ -71,6 +71,10 @@ function createServer() {
         .describe(
           "User's confidence in this insight. 1=speculative, 5=battle-tested. Infer from tone if not stated."
         ),
+      user_id: z
+        .string()
+        .optional()
+        .describe("User's LearnTube ID. Pass the same ID from the session-start connect call."),
     },
     async (args, extra) => handleSave(args, extra)
   );
@@ -122,6 +126,10 @@ function createServer() {
       level_up_move: z
         .string()
         .describe("The ONE behavior change for biggest impact next session. Actionable tomorrow."),
+      user_id: z
+        .string()
+        .optional()
+        .describe("User's LearnTube ID. Pass the same ID from the session-start connect call."),
     },
     async (args, extra) => handleElevate(args, extra)
   );
@@ -156,6 +164,10 @@ function createServer() {
         .enum(["no_reasoning", "surface", "partial", "deep"])
         .optional()
         .describe("Quality of reasoning: no_reasoning=just picked, surface=style, partial=one issue, deep=core trap."),
+      user_id: z
+        .string()
+        .optional()
+        .describe("User's LearnTube ID. Pass the same ID from the session-start connect call."),
     },
     async (args, extra) => handleProve(args, extra)
   );
@@ -194,6 +206,10 @@ function createServer() {
         .string()
         .optional()
         .describe("Professional domain for contextualization."),
+      user_id: z
+        .string()
+        .optional()
+        .describe("User's LearnTube ID. Pass the same ID from the session-start connect call."),
     },
     async (args, extra) => handleSharpen(args, extra)
   );

@@ -285,3 +285,104 @@ export const TOOL_ABILITY_MAP = {
   sharpen: ["A2", "A4"], // Communication improvement through iteration
   connect: ["A5", "A6", "A8"], // Thinking across saves, workflow patterns, sharing
 };
+
+// ─── PROOF SCORE (Elo-like Rating System) ─────────────────
+
+export const PROOF_K_FACTOR = 32;
+export const START_PROOF_SCORE = 1000;
+
+export const CHALLENGE_DIFFICULTY_MAP = {
+  polish_vs_substance: 1000,
+  confident_vs_hedged: 1100,
+  complete_vs_right: 1050,
+  specific_vs_generic: 1150,
+  agreement_trap: 1200,
+};
+
+export const PROOF_BANDS = {
+  Bronze:   { min: 0,    max: 799,  label: "Developing Eye" },
+  Silver:   { min: 800,  max: 999,  label: "Skeptical Mind" },
+  Gold:     { min: 1000, max: 1199, label: "Sharp Evaluator" },
+  Platinum: { min: 1200, max: 1399, label: "Artifact Resistant" },
+  Diamond:  { min: 1400, max: 9999, label: "Judgment Elite" },
+};
+
+export function getBandForScore(score) {
+  for (const [band, range] of Object.entries(PROOF_BANDS)) {
+    if (score >= range.min && score <= range.max) {
+      return { band, label: range.label };
+    }
+  }
+  return { band: "Bronze", label: "Developing Eye" };
+}
+
+export function getNextBandDistance(score) {
+  const currentBand = getBandForScore(score);
+  const bands = Object.entries(PROOF_BANDS);
+  const currentIdx = bands.findIndex(([b]) => b === currentBand.band);
+  if (currentIdx >= bands.length - 1) return { nextBand: null, distance: 0 };
+  const nextBand = bands[currentIdx + 1];
+  return {
+    nextBand: nextBand[0],
+    nextLabel: nextBand[1].label,
+    distance: nextBand[1].min - score,
+  };
+}
+
+/**
+ * Calculate new Proof Score after a prove challenge (Elo formula).
+ * @param {number} currentRating - Current proof score
+ * @param {number} challengeDifficulty - Base difficulty of the trap type
+ * @param {boolean} correct - Whether user answered correctly
+ * @param {number} confidence - User's confidence rating (1-5)
+ * @returns {{ newRating: number, delta: number }}
+ */
+export function calculateProofScore(currentRating, challengeDifficulty, correct, confidence) {
+  const expected = 1 / (1 + Math.pow(10, (challengeDifficulty - currentRating) / 400));
+  const actual = correct ? 1 : 0;
+
+  // Calibration multiplier: confident + correct = small bonus, confident + wrong = bigger penalty
+  const calibrationMultiplier = correct
+    ? (confidence >= 4 ? 1.15 : 1.0)
+    : (confidence >= 4 ? 1.25 : 1.0);
+
+  const delta = Math.round(PROOF_K_FACTOR * calibrationMultiplier * (actual - expected));
+  const newRating = Math.max(0, currentRating + delta);
+
+  return { newRating, delta };
+}
+
+// ─── EXERCISE TYPE MAP (for sharpen chaining) ──────────────
+
+export const EXERCISE_TYPE_MAP = {
+  A1: "task_triage",
+  A2: "prompt_rewrite",
+  A3: "output_evaluation",
+  A4: "iteration_challenge",
+  A5: "thinking_extension",
+  A6: "workflow_design",
+  A7: "orchestration_scenario",
+  A8: "teaching_exercise",
+};
+
+// ─── SAVE MILESTONES (for variable rewards) ────────────────
+
+export const SAVE_MILESTONES = [5, 10, 15, 25, 50, 75, 100, 150, 200];
+
+export function checkMilestone(count) {
+  if (SAVE_MILESTONES.includes(count)) {
+    const messages = {
+      5: "First milestone — you're building a real knowledge base.",
+      10: "10 insights deep. Patterns are starting to emerge.",
+      15: "15 insights unlocks Pattern Recognition — your themes are visible now.",
+      25: "25 insights. You have more organized AI learning than 95% of professionals.",
+      50: "50 insights. This is a genuine personal knowledge system.",
+      75: "75 insights. Your knowledge graph is developing real density.",
+      100: "100 insights. You've built something most people never will.",
+      150: "150 insights. Mastery-level knowledge accumulation.",
+      200: "200 insights. You're operating at the frontier.",
+    };
+    return { hit: true, count, message: messages[count] };
+  }
+  return { hit: false };
+}

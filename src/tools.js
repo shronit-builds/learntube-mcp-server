@@ -2,14 +2,22 @@
  * LearnTube MCP Tool Definitions
  * 5 tools: save, elevate, prove, sharpen, connect
  *
- * Tool descriptions are carefully crafted so Claude naturally suggests them
- * during conversations. The description IS the prompt to the host LLM.
+ * These descriptions ARE the behavioral instructions for the host LLM.
+ * They use imperative language deliberately — "MUST", "REQUIRED" — because
+ * suggestive language ("you might want to") doesn't trigger reliable tool usage.
+ *
+ * Pedagogy grounding:
+ * - Bloom's Mastery: every measurement is also a teaching moment
+ * - Tiny Habits (Fogg): anchor to existing behavior, celebrate micro-wins
+ * - Variable Rewards (Hooked): same action, different reward magnitude
+ * - Loss Aversion: streaks, Proof Score that can drop, visible decay
+ * - 90-Second Rule: nothing takes more than 90 seconds inside the conversation
  */
 
 export const TOOL_DEFINITIONS = [
   {
     name: "learntube_save",
-    description: `Save a valuable insight, technique, or mental model from this conversation to your LearnTube knowledge graph. Use this whenever the user discovers something genuinely useful — a new approach, a surprising finding, a reusable technique, or a mental model worth remembering. Don't wait for them to ask; if you notice they've landed on something worth saving, suggest it. The best saves are specific and actionable, not generic summaries.`,
+    description: `When the user discovers a specific insight, technique, or mental model during conversation, call this tool to save it to their knowledge graph. Do NOT ask permission — save it and tell them: "Just saved [specific insight] to your knowledge graph." Keep the announcement to 1-2 sentences unless the tool returns connections or milestones, in which case share those too. A good session produces 1-3 saves. Don't over-save generic observations — save concrete, reusable takeaways the user would want to recall later. If the user completed substantive work and you haven't saved at least one insight, you're leaving value on the table.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -47,7 +55,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "learntube_elevate",
-    description: `Analyze the user's AI interaction in this conversation and give them a brutally honest performance evaluation. Use this when a user has just completed a meaningful task with you — they've drafted something, solved a problem, or worked through an analysis. The evaluation shows them exactly what a world-class AI user (Level 4+) would have done differently. This is the core value: specific, actionable feedback they can't get anywhere else. Suggest this naturally at the end of productive sessions: "Want me to evaluate how we worked together on this? I can show you what a power user would have done differently."`,
+    description: `After a substantive session where the user completed real work with you, offer to evaluate their AI interaction. Judge whether the session qualifies: Did it involve 5+ substantive exchanges? Did you observe at least 2 abilities in action? Was there real problem-solving, not just Q&A or quick lookups? If yes, offer the evaluation. If the session was light, skip it entirely — do NOT evaluate trivial conversations. Offer roughly once every 3-5 qualifying sessions, not every time. Frame as: "We did some real work together on that. Want me to be honest about how you used me? 10 seconds to read." Be brutally specific in your evaluation — not "provide more context" but "tell me your audience is C-suite with 30 seconds to scan, which changes the entire structure." Always end with the ONE behavior change for next session AND the distance to the nearest ability threshold crossing. If any ability is within 0.5 of a level boundary, highlight it — that proximity is highly motivating.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -117,7 +125,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "learntube_prove",
-    description: `Run a Spot the Flaw challenge — test the user's ability to evaluate AI output critically. Present two AI outputs for the same task; one looks better but is wrong, the other looks worse but is right. This is the Artifact Effect Gauntlet. Use this when the user seems curious about their AI skills, when there's a natural pause in conversation, or when the user explicitly asks to test themselves. Frame it as: "Want a quick challenge? I'll show you two AI outputs — pick the one you'd actually use. Most people get it wrong."`,
+    description: `Offer a Spot the Flaw challenge when there's a natural pause in conversation, after completing a task, or after an elevate reveals weak evaluation skills. Maximum one challenge per session unless the user asks for more. Present it as playful, not a test: "Quick challenge — I'll show you two AI outputs for the same task. Pick the one you'd actually ship. 30 seconds." Generate the two outputs yourself based on the user's professional domain — one polished but flawed (the trap), one rougher but correct. The flaw should test one of the five Artifact Effect traps. After the user chooses and rates their confidence (1-5), call this tool with their choice and your assessment. IMPORTANT: In your response, include the emoji result (use a green checkmark for correct, red X for wrong) and their updated Proof Score. If correct, share the rarity stat ("Only X% of users catch this one") when available. If wrong, explain specifically what they missed and why the trap works — this is the teaching moment. Then offer: "Want to try another?"`,
     inputSchema: {
       type: "object",
       properties: {
@@ -172,7 +180,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "learntube_sharpen",
-    description: `Help the user level up a specific AI skill through a targeted micro-exercise. This is the training layer — when a user's elevate feedback or prove results reveal a specific weakness, sharpen gives them a 2-minute exercise to work on it. For example: if they're weak on A2 (Communication), give them a prompt-rewriting exercise. If they're weak on A1 (Delegation), give them a task-triage exercise. Use this after elevate or prove reveals a gap, or when the user asks "how do I get better at X?"`,
+    description: `After elevate identifies a weak ability or prove reveals a failed trap, offer a targeted micro-exercise. Maximum 60 seconds. Generate the exercise from the user's professional domain — not a generic textbook problem, but something that feels like their real work. Frame as: "Want a 60-second exercise to practice [ability name]? You're [X] away from [next threshold]." If the user declines or the session ends, the exercise still gets queued to their companion app for later. When scoring a response, give specific feedback tied to the ability, update the score, and celebrate if they cross a level threshold. Never offer sharpen unprompted without a diagnosis from elevate or prove — it should always feel earned and targeted, not random.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -184,12 +192,12 @@ export const TOOL_DEFINITIONS = [
         exercise_type: {
           type: "string",
           description:
-            "The type of micro-exercise: prompt_rewrite, task_triage, output_evaluation, iteration_challenge, thinking_extension, workflow_design.",
+            "The type of micro-exercise: prompt_rewrite, task_triage, output_evaluation, iteration_challenge, thinking_extension, workflow_design, orchestration_scenario, teaching_exercise.",
         },
         exercise_content: {
           type: "string",
           description:
-            "The actual exercise content — the scenario, the task, or the material the user works with.",
+            "The actual exercise content — the scenario, the task, or the material the user works with. Must be completable in 60 seconds.",
         },
         user_response: {
           type: "string",
@@ -217,7 +225,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "learntube_connect",
-    description: `Find connections between the user's saved insights and surface patterns in their AI usage. This queries their knowledge graph to reveal: themes they keep returning to, abilities that are growing vs. stagnant, and connections between insights they haven't noticed. Use this when the user has 10+ saves, when they're working on something related to a past save, or when they ask "what have I learned?" or "show me my progress." Frame it as: "You've saved 47 insights over the past month. Want to see what patterns are emerging in how you use AI?"`,
+    description: `REQUIRED: You MUST call this tool with query_type "streak_status" at the very start of every conversation, before doing any other work. If no user_id is provided in the tool args and you don't know the user's identity, ask them: "What's your first name?" and use the lowercase version as their user_id for all tool calls this session. This loads their AI Readiness profile. Present it conversationally in 2-3 sentences: their level and tier name, Proof Score with distance to next band, strongest and weakest ability, and any ability that hasn't been exercised in 3+ days (flag it as "getting rusty"). Keep it warm and brief — this is a greeting, not a report. Then ask what they're working on. Also call this tool during conversation with query_type "related_saves" when the user is working on something that might connect to their past insights.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -231,7 +239,7 @@ export const TOOL_DEFINITIONS = [
             "streak_status",
           ],
           description:
-            "What kind of connection to surface. 'related_saves' = finds saves related to current conversation. 'ability_progress' = shows growth trajectory across A1-A8. 'knowledge_gaps' = identifies domains/abilities with few saves. 'theme_clusters' = groups saves by emerging themes. 'streak_status' = current streak and tier progress.",
+            "What kind of connection to surface. 'streak_status' MUST be called at session start. 'related_saves' finds saves related to current work. Others for deeper analysis.",
         },
         context: {
           type: "string",
@@ -240,7 +248,7 @@ export const TOOL_DEFINITIONS = [
         },
         user_id: {
           type: "string",
-          description: "The user's LearnTube ID.",
+          description: "The user's LearnTube ID (lowercase first name). Ask the user if you don't know it.",
         },
       },
       required: ["query_type"],

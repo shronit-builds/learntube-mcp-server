@@ -1,5 +1,12 @@
 /**
- * Tool handlers — the actual logic for each MCP tool
+ * Tool handlers — the coaching loop logic for each MCP tool
+ *
+ * Design principles embedded in every handler:
+ * - Bloom's Mastery: every measurement is also a teaching moment
+ * - Variable Rewards: same action, different reward magnitudes
+ * - Tiny Habits: celebrate micro-wins immediately
+ * - Loss Aversion: streaks, Proof Score, visible decay
+ * - 90-Second Rule: keep it snackable
  */
 
 import {
@@ -16,17 +23,34 @@ import {
   updateStreak,
   getAbilityProgress,
   getThemeClusters,
+  createLearningQueueItem,
+  getLearningQueueCount,
+  updateProofScore,
+  getProveRarityForType,
 } from "./db.js";
-import { ABILITIES, LEVELS, estimateLevel, TOOL_ABILITY_MAP } from "./framework.js";
+import {
+  ABILITIES,
+  LEVELS,
+  estimateLevel,
+  TOOL_ABILITY_MAP,
+  PROOF_BANDS,
+  CHALLENGE_DIFFICULTY_MAP,
+  calculateProofScore,
+  getBandForScore,
+  getNextBandDistance,
+  EXERCISE_TYPE_MAP,
+  checkMilestone,
+} from "./framework.js";
 
 // For now, derive userId from a header or env. In production, this comes from auth.
 function getUserId(extra) {
-  // MCP doesn't have auth built in — for Phase 0, use a static user or
-  // derive from the client's metadata. Production will use Supabase auth.
   return extra?.userId || process.env.DEFAULT_USER_ID || "demo-user";
 }
 
 // ─── SAVE ────────────────────────────────────────────────
+// Pedagogy: Variable rewards on every save. Sometimes just a confirmation,
+// sometimes a connection to past insight, sometimes a milestone.
+// Also creates a flash card in the learning queue for the companion app.
 
 export async function handleSave(args, extra) {
   const userId = getUserId(extra);
@@ -44,18 +68,37 @@ export async function handleSave(args, extra) {
     const saveCount = await getSaveCount(userId);
     const streak = await updateStreak(userId);
 
+    // ── Variable Reward Layer ──────────────────────────
+
+    // Check for milestone (variable reward: sometimes just a save, sometimes a milestone)
+    const milestone = checkMilestone(saveCount);
+
+    // Domain growth: how deep is the user going in this domain?
+    const domainSaves = await getSaves(userId, { domain: args.domain, limit: 50 });
+    const domainCount = domainSaves.length;
+    const recentTopics = [...new Set(domainSaves.slice(0, 10).flatMap((s) => s.tags || []))].slice(0, 5);
+
+    const domainGrowth = {
+      totalInDomain: domainCount,
+      recentTopics,
+      message:
+        domainCount >= 10
+          ? `${domainCount} insights in ${args.domain}. Your most frequent themes: ${recentTopics.join(", ")}. This is becoming a real knowledge base.`
+          : `${domainCount} insight${domainCount === 1 ? "" : "s"} in ${args.domain} so far. After 10, patterns start emerging.`,
+    };
+
     // Auto-connect: find related saves by overlapping tags
     let connections = [];
-    if (saveCount > 5) {
+    if (saveCount > 3) {
       const related = await getSaves(userId, {
         tags: args.tags,
-        limit: 3,
+        limit: 5,
       });
       connections = related
         .filter((s) => s.id !== save.id)
         .map((s) => ({
           id: s.id,
-          insight: s.insight.substring(0, 80),
+          insight: s.insight.substring(0, 100),
           sharedTags: s.tags.filter((t) => args.tags.includes(t)),
         }));
 
@@ -67,15 +110,29 @@ export async function handleSave(args, extra) {
       }
     }
 
-    // Build knowledge graph stage message
-    let graphStage;
-    if (saveCount <= 50) {
-      graphStage = `Stage 1: Building your foundation (${saveCount}/50 saves). Each save is tagged and searchable.`;
-    } else if (saveCount <= 200) {
-      graphStage = `Stage 2: Connections emerging (${saveCount} saves). Your insights are starting to link — ${connections.length} related saves found.`;
-    } else {
-      graphStage = `Stage 3: Knowledge graph active (${saveCount} saves). AI-inferred connections revealing patterns you haven't noticed.`;
+    // Determine reward magnitude for the response
+    let rewardType = "standard"; // standard | connection | milestone
+    if (milestone.hit) rewardType = "milestone";
+    else if (connections.length > 0 && connections[0].sharedTags.length >= 2) rewardType = "connection";
+
+    // ── Flash Card for Companion App ──────────────────
+    // Every save becomes a learning queue item the user can review later
+    try {
+      await createLearningQueueItem(userId, {
+        type: "flash_card",
+        front: args.context
+          ? `What technique or insight did you discover while working on: ${args.context}?`
+          : `What's the key insight about ${args.tags.slice(0, 2).join(" and ")}?`,
+        back: args.insight,
+        sourceTool: "save",
+        sourceId: save.id,
+        domain: args.domain,
+      });
+    } catch (e) {
+      // Non-critical — don't fail the save if queue insert fails
     }
+
+    // ── Build Response ────────────────────────────────
 
     return {
       content: [
@@ -87,16 +144,31 @@ export async function handleSave(args, extra) {
               saveId: save.id,
               totalSaves: saveCount,
               streak: streak.streakDays,
-              graphStage,
+              rewardType,
+              domainGrowth,
+              milestone: milestone.hit ? milestone : null,
               relatedInsights:
                 connections.length > 0
-                  ? connections.map((c) => c.insight)
+                  ? connections.slice(0, 3).map((c) => ({
+                      insight: c.insight,
+                      sharedTags: c.sharedTags,
+                    }))
                   : null,
-              message: `Saved to your knowledge graph. ${graphStage}${
-                streak.streakDays > 1
-                  ? ` 🔥 ${streak.streakDays}-day streak.`
-                  : ""
-              }`,
+              message: (() => {
+                let msg = `Saved to your knowledge graph.`;
+                if (milestone.hit) {
+                  msg += ` 🏆 Milestone: ${milestone.message}`;
+                } else if (connections.length > 0 && connections[0].sharedTags.length >= 2) {
+                  msg += ` This connects to a past insight: "${connections[0].insight}" — you're building a pattern.`;
+                }
+                msg += ` ${domainGrowth.message}`;
+                if (streak.streakDays > 1) {
+                  msg += ` 🔥 ${streak.streakDays}-day streak.`;
+                }
+                return msg;
+              })(),
+              companionAppNote:
+                "A flash card from this insight has been added to your companion app for review.",
             },
             null,
             2
@@ -118,6 +190,9 @@ export async function handleSave(args, extra) {
 }
 
 // ─── ELEVATE ─────────────────────────────────────────────
+// Pedagogy: Bloom's formative assessment. Every evaluation comes with
+// specific next action + threshold proximity (loss aversion).
+// Chains to sharpen for the weakest ability observed.
 
 export async function handleElevate(args, extra) {
   const userId = getUserId(extra);
@@ -138,15 +213,40 @@ export async function handleElevate(args, extra) {
     const level = args.user_level_estimate;
     const levelInfo = LEVELS[level] || LEVELS[0];
 
-    // Build the ability radar
+    // Build the ability radar with threshold proximity detection
     const abilityRadar = {};
+    let weakestAbility = null;
+    let weakestScore = 7;
+    let thresholdProximity = [];
+
     if (args.ability_scores) {
       for (const [key, score] of Object.entries(args.ability_scores)) {
         if (score !== null && score !== undefined && ABILITIES[key]) {
+          const nextLevel = Math.ceil(score);
+          const distance = nextLevel - score;
+          const isClose = distance > 0 && distance <= 0.5;
+
           abilityRadar[ABILITIES[key].shortName] = {
             score,
-            level: LEVELS[Math.min(score, 6)]?.name || "Unknown",
+            level: LEVELS[Math.min(Math.round(score), 6)]?.name || "Unknown",
+            nearThreshold: isClose,
           };
+
+          if (isClose) {
+            thresholdProximity.push({
+              ability: ABILITIES[key].shortName,
+              abilityId: key,
+              current: score,
+              threshold: nextLevel,
+              distance: Math.round(distance * 100) / 100,
+              nextLevelName: LEVELS[Math.min(nextLevel, 6)]?.name || "Unknown",
+            });
+          }
+
+          if (score < weakestScore) {
+            weakestScore = score;
+            weakestAbility = { id: key, ...ABILITIES[key] };
+          }
         }
       }
     }
@@ -158,6 +258,41 @@ export async function handleElevate(args, extra) {
         : level === 3
         ? "You've crossed the hardest threshold — you evaluate AI critically, not just cosmetically. The next frontier: designing workflows, not just using tools."
         : null;
+
+    // ── Chain to Sharpen (next action) ────────────────
+    let nextAction = null;
+    if (weakestAbility) {
+      const exerciseType = EXERCISE_TYPE_MAP[weakestAbility.id] || "output_evaluation";
+      nextAction = {
+        tool: "learntube_sharpen",
+        target_ability: weakestAbility.id,
+        exercise_type: exerciseType,
+        ability_name: weakestAbility.shortName,
+        score: weakestScore,
+        instruction: `Offer a 60-second exercise: "Want a quick exercise to practice ${weakestAbility.shortName}? Your score was ${weakestScore.toFixed(1)}${
+          thresholdProximity.find((t) => t.abilityId === weakestAbility.id)
+            ? ` — you're ${thresholdProximity.find((t) => t.abilityId === weakestAbility.id).distance} away from ${thresholdProximity.find((t) => t.abilityId === weakestAbility.id).nextLevelName}`
+            : ""
+        }."`,
+      };
+    }
+
+    // ── Learning Queue: Growth Exercise ───────────────
+    try {
+      await createLearningQueueItem(userId, {
+        type: "growth_exercise",
+        front: `Practice for next session: ${args.level_up_move}`,
+        back: `From your ${args.domain} session: ${args.what_they_missed}\n\nThe ONE move: ${args.level_up_move}`,
+        sourceTool: "elevate",
+        sourceId: result.id,
+        domain: args.domain,
+      });
+    } catch (e) {
+      // Non-critical
+    }
+
+    // ── Companion App Queue Count ─────────────────────
+    const queueCount = await getLearningQueueCount(userId).catch(() => 0);
 
     return {
       content: [
@@ -171,6 +306,8 @@ export async function handleElevate(args, extra) {
                 tierColor: levelInfo.color,
                 levelName: levelInfo.name,
                 abilityRadar,
+                thresholdProximity:
+                  thresholdProximity.length > 0 ? thresholdProximity : null,
                 whatYouDidWell: args.what_they_did_well,
                 whatYouMissed: args.what_they_missed,
                 levelUpMove: args.level_up_move,
@@ -180,11 +317,13 @@ export async function handleElevate(args, extra) {
                 totalElevates: userScore?.total_elevates || 1,
                 runningAbilities: userScore?.abilities || {},
               },
-              credential: {
-                currentTier: levelInfo.tier,
-                tierColor: levelInfo.color,
-                shareUrl: `https://learntube.ai/credential/${userId}`,
-                message: `Your AI Readiness credential is live. Share it to show where you stand.`,
+              nextAction,
+              companionApp: {
+                pendingItems: queueCount,
+                message:
+                  queueCount > 0
+                    ? `You have ${queueCount} items waiting in your companion app — flash cards, exercises, and reviews from your sessions.`
+                    : null,
               },
             },
             null,
@@ -207,6 +346,9 @@ export async function handleElevate(args, extra) {
 }
 
 // ─── PROVE ───────────────────────────────────────────────
+// Pedagogy: Elo-rated challenges with immediate score movement (loss aversion),
+// rarity stats (social proof), calibration tracking, and trap education.
+// Wrong answers generate learning queue items for the companion app.
 
 export async function handleProve(args, extra) {
   const userId = getUserId(extra);
@@ -221,25 +363,47 @@ export async function handleProve(args, extra) {
       reasoningQuality: args.reasoning_quality,
     });
 
-    const history = await getProveHistory(userId, 10);
+    // ── Elo Calculation ───────────────────────────────
+    const userScore = await getUserScore(userId);
+    const currentProofScore = userScore?.proof_score || 1000;
+    const challengeDifficulty = CHALLENGE_DIFFICULTY_MAP[args.challenge_type] || 1000;
+
+    const { newRating, delta } = calculateProofScore(
+      currentProofScore,
+      challengeDifficulty,
+      args.correct,
+      args.user_confidence
+    );
+
+    const oldBand = getBandForScore(currentProofScore);
+    const newBandInfo = getBandForScore(newRating);
+    const bandChanged = oldBand.band !== newBandInfo.band;
+    const nextBandInfo = getNextBandDistance(newRating);
+
+    // Update proof score in database
+    await updateProofScore(userId, newRating, newBandInfo.band);
+
+    // ── History & Calibration ─────────────────────────
+    const history = await getProveHistory(userId, 20);
     const recentCorrect = history.filter((h) => h.correct).length;
     const recentTotal = history.length;
     const accuracy = recentTotal > 0 ? (recentCorrect / recentTotal) * 100 : 0;
 
-    // Calculate calibration score
-    const avgConfidenceWhenWrong = history
-      .filter((h) => !h.correct)
-      .reduce((sum, h) => sum + h.user_confidence, 0) /
-      (history.filter((h) => !h.correct).length || 1);
-
+    // Calibration: average confidence when wrong
+    const wrongWithHighConfidence = history.filter(
+      (h) => !h.correct && h.user_confidence >= 4
+    ).length;
+    const totalWrong = history.filter((h) => !h.correct).length;
     const calibrationScore =
-      avgConfidenceWhenWrong > 3
-        ? "Overconfident when wrong — this is the classic Level 2 pattern"
-        : avgConfidenceWhenWrong > 2
-        ? "Moderately calibrated — you sometimes know what you don't know"
-        : "Well calibrated — you know when you're uncertain";
+      totalWrong === 0
+        ? "Perfectly calibrated so far — but the sample is small."
+        : wrongWithHighConfidence / totalWrong > 0.5
+        ? "Overconfident when wrong — this is the classic Artifact Effect pattern. You trust polish too much."
+        : wrongWithHighConfidence / totalWrong > 0.25
+        ? "Moderately calibrated — you sometimes know what you don't know."
+        : "Well calibrated — you know when you're uncertain. That's a rare and valuable skill.";
 
-    // Which traps they fall for most
+    // Trap performance breakdown
     const trapPerformance = {};
     for (const h of history) {
       if (!trapPerformance[h.challenge_type]) {
@@ -249,7 +413,39 @@ export async function handleProve(args, extra) {
       if (h.correct) trapPerformance[h.challenge_type].correct++;
     }
 
+    // ── Rarity Stat ───────────────────────────────────
+    let rarityStat = null;
+    if (args.correct) {
+      const rarity = await getProveRarityForType(args.challenge_type);
+      if (rarity && rarity.total >= 3) {
+        rarityStat = `Only ${rarity.catchRate}% of users catch the ${args.challenge_type.replace(/_/g, " ")} trap.`;
+      }
+    }
+
     const streak = await updateStreak(userId);
+
+    // ── Trap Review for Companion App (when wrong) ────
+    if (!args.correct) {
+      try {
+        const trapName = args.challenge_type.replace(/_trap$/, "").replace(/_/g, " ");
+        await createLearningQueueItem(userId, {
+          type: "trap_review",
+          front: `Why did you fall for the ${trapName} trap in ${args.challenge_domain}? What should you look for next time?`,
+          back: `You chose Output ${args.user_choice} with confidence ${args.user_confidence}/5, but it was incorrect. The ${trapName} trap works because polished, confident-sounding AI output triggers acceptance even when the reasoning is flawed. Next time, look past formatting and check: Is the logic sound? Are the specifics verifiable? Does it hedge where it should?`,
+          sourceTool: "prove",
+          sourceId: result.id,
+          domain: args.challenge_domain,
+        });
+      } catch (e) {
+        // Non-critical
+      }
+    }
+
+    // ── Build Response ────────────────────────────────
+
+    const trapName = args.challenge_type
+      .replace(/_trap$/, "")
+      .replace(/_/g, " ");
 
     return {
       content: [
@@ -260,41 +456,58 @@ export async function handleProve(args, extra) {
               result: {
                 correct: args.correct,
                 challengeType: args.challenge_type,
-                confidenceGap: args.correct
-                  ? 0
-                  : args.user_confidence - 1,
+                emoji: args.correct ? "🟩" : "🟥",
+                confidenceGap: args.correct ? 0 : args.user_confidence - 1,
+              },
+              proofScore: {
+                previous: currentProofScore,
+                current: newRating,
+                delta: delta > 0 ? `+${delta}` : `${delta}`,
+                band: newBandInfo.band,
+                bandLabel: newBandInfo.label,
+                bandChanged,
+                bandChangeMessage: bandChanged
+                  ? delta > 0
+                    ? `🏆 You just crossed into ${newBandInfo.band} — ${newBandInfo.label}!`
+                    : `You dropped to ${newBandInfo.band}. Win it back.`
+                  : null,
+                nextBand: nextBandInfo.nextBand
+                  ? `${nextBandInfo.distance} points to ${nextBandInfo.nextBand}.`
+                  : "You're at the top band.",
               },
               stats: {
                 recentAccuracy: `${Math.round(accuracy)}% (${recentCorrect}/${recentTotal})`,
                 calibration: calibrationScore,
                 trapPerformance,
                 streak: streak.streakDays,
+                rarityStat,
               },
-              abilityImpact: {
-                primary: "A3 (Output Evaluation)",
-                secondary: "A1 (Problem Delegation)",
+              teaching: {
                 message: (() => {
-                  // Format trap name: "polish_vs_substance" → "polish vs substance"
-                  // "agreement_trap" → "agreement" (strip trailing _trap to avoid "agreement trap trap")
-                  const trapName = args.challenge_type
-                    .replace(/_trap$/, "")
-                    .replace(/_/g, " ");
                   if (args.correct) {
-                    return "You resisted the trap. This is Level 3+ evaluation skill.";
+                    return `You resisted the ${trapName} trap. ${
+                      rarityStat || "That's Level 3+ evaluation skill."
+                    }`;
                   }
-                  const confidenceMsg = args.user_confidence >= 4
-                    ? "And you were confident about it — that's the dangerous pattern."
-                    : "But you weren't sure — that uncertainty is actually a good sign.";
+                  const confidenceMsg =
+                    args.user_confidence >= 4
+                      ? "And you were confident about it — that's the dangerous pattern. High confidence + wrong answer = the Artifact Effect in action."
+                      : "Your confidence was moderate — that uncertainty is actually a good sign. Trust that instinct next time.";
                   return `You fell for the ${trapName} trap. ${confidenceMsg}`;
                 })(),
               },
-              sharePrompt: (() => {
-                if (!args.correct) return null;
-                const trapName = args.challenge_type
-                  .replace(/_trap$/, "")
-                  .replace(/_/g, " ");
-                return `I caught the ${trapName} trap in LearnTube's Spot the Flaw challenge. ${Math.round(accuracy)}% accuracy across ${recentTotal} challenges. Think you can beat that?`;
-              })(),
+              nextAction: !args.correct
+                ? {
+                    tool: "learntube_sharpen",
+                    target_ability: "A3",
+                    exercise_type: "output_evaluation",
+                    instruction:
+                      'Offer: "Want a quick exercise to sharpen your Output Evaluation? I can give you a 60-second drill targeting exactly this weakness."',
+                  }
+                : null,
+              sharePrompt: args.correct
+                ? `${args.correct ? "🟩" : "🟥"} Caught the ${trapName} trap. Proof Score: ${newRating} (${delta > 0 ? "+" : ""}${delta}). ${rarityStat || ""} #AIReadiness`
+                : null,
             },
             null,
             2
@@ -316,6 +529,8 @@ export async function handleProve(args, extra) {
 }
 
 // ─── SHARPEN ─────────────────────────────────────────────
+// Pedagogy: Retrieval practice (Bloom), not re-reading. 60-second ceiling (Tiny Habits).
+// Celebration on threshold crossing (Fogg). Queues to companion app if skipped.
 
 export async function handleSharpen(args, extra) {
   const userId = getUserId(extra);
@@ -331,45 +546,133 @@ export async function handleSharpen(args, extra) {
       };
     }
 
-    // If this is a submission (has user_response + score), record it
+    // If this is a submission (has user_response + score), record and score it
     if (args.user_response && args.score !== undefined) {
-      // Store in a general activity log
       const streak = await updateStreak(userId);
 
+      // Update the specific ability score via EMA
+      const userScore = await getUserScore(userId);
+      if (userScore) {
+        const abilities = userScore.abilities || {};
+        const alpha = 0.3;
+        const prev = abilities[args.target_ability]?.score;
+        const newScore =
+          prev !== undefined
+            ? alpha * args.score + (1 - alpha) * prev
+            : args.score;
+
+        abilities[args.target_ability] = {
+          score: newScore,
+          lastUpdated: new Date().toISOString(),
+          observations: (abilities[args.target_ability]?.observations || 0) + 1,
+        };
+
+        // Check for threshold crossing
+        const prevLevel = prev !== undefined ? Math.floor(prev) : -1;
+        const newLevel = Math.floor(newScore);
+        const crossedThreshold = newLevel > prevLevel && prevLevel >= 0;
+
+        // Compute running level
+        const emaScores = {};
+        for (const [key, val] of Object.entries(abilities)) {
+          if (val?.score !== undefined) emaScores[key] = Math.round(val.score);
+        }
+        const computedLevel =
+          Object.keys(emaScores).length > 0 ? estimateLevel(emaScores) : userScore.level || 0;
+
+        const TIER_MAP = {
+          0: "Explorer", 1: "Explorer", 2: "Practitioner",
+          3: "Operator", 4: "Strategist", 5: "Architect", 6: "Pioneer",
+        };
+
+        await upsertUserScore(userId, {
+          tier: TIER_MAP[computedLevel] || "Explorer",
+          level: computedLevel,
+          abilities,
+          streakDays: streak.streakDays,
+          totalSaves: userScore.total_saves || 0,
+          totalElevates: userScore.total_elevates || 0,
+          totalProves: userScore.total_proves || 0,
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  exercise: {
+                    ability: ability.name,
+                    abilityId: args.target_ability,
+                    type: args.exercise_type,
+                    score: args.score,
+                    previousScore: prev !== undefined ? Math.round(prev * 100) / 100 : null,
+                    newRunningScore: Math.round(newScore * 100) / 100,
+                    levelEquivalent: LEVELS[Math.min(Math.round(newScore), 6)]?.name,
+                    feedback: args.feedback,
+                  },
+                  thresholdCrossed: crossedThreshold
+                    ? {
+                        ability: ability.shortName,
+                        from: LEVELS[prevLevel]?.name || `Level ${prevLevel}`,
+                        to: LEVELS[newLevel]?.name || `Level ${newLevel}`,
+                        message: `🎯 Your ${ability.shortName} just crossed from ${LEVELS[prevLevel]?.name || "Level " + prevLevel} to ${LEVELS[newLevel]?.name || "Level " + newLevel}. That's a real threshold — most people plateau before this.`,
+                      }
+                    : null,
+                  progress: {
+                    streak: streak.streakDays,
+                    overallLevel: computedLevel,
+                    message:
+                      args.score >= 3
+                        ? `Solid ${ability.shortName} performance. You're operating at ${LEVELS[Math.min(Math.round(args.score), 6)]?.name || "advanced"} level on this exercise.`
+                        : `Room to grow on ${ability.shortName}. Focus on: ${ability.signals.high[0]?.replace(/_/g, " ")}. Repetition at the edge of your ability is where growth happens.`,
+                  },
+                  nextStep:
+                    args.score < 3
+                      ? `Want to try another ${ability.shortName} exercise? One more rep builds the muscle.`
+                      : `Strong on ${ability.shortName}. Ready to get back to your work, or want to test a different ability?`,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      // Fallback if no user score record
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(
-              {
-                exercise: {
-                  ability: ability.name,
-                  type: args.exercise_type,
-                  score: args.score,
-                  levelEquivalent: LEVELS[Math.min(args.score, 6)]?.name,
-                  feedback: args.feedback,
-                },
-                progress: {
-                  streak: streak.streakDays,
-                  message:
-                    args.score >= 3
-                      ? `Solid ${ability.shortName} performance. You're operating at Effective Practitioner level on this exercise.`
-                      : `Room to grow on ${ability.shortName}. The key gap: ${ability.signals.high[0]?.replace(/_/g, " ")}. Try again with that focus.`,
-                },
-                nextStep:
-                  args.score < 3
-                    ? `Want to try another ${ability.shortName} exercise? Repetition at the edge of your ability is where growth happens.`
-                    : `Your ${ability.shortName} is strong. Want to test a different ability, or run an elevate on your next real task?`,
+            text: JSON.stringify({
+              exercise: {
+                ability: ability.name,
+                type: args.exercise_type,
+                score: args.score,
+                feedback: args.feedback,
               },
-              null,
-              2
-            ),
+              message: `Exercise scored. ${ability.shortName}: ${args.score}/6.`,
+            }, null, 2),
           },
         ],
       };
     }
 
-    // If this is just the exercise content (no response yet), acknowledge
+    // If this is just the exercise content (no response yet), queue it and acknowledge
+    // Queue as pending_sharpen in companion app so it persists even if user skips
+    try {
+      await createLearningQueueItem(userId, {
+        type: "pending_sharpen",
+        front: `${ability.shortName} exercise (${args.exercise_type.replace(/_/g, " ")}): ${args.exercise_content.substring(0, 200)}...`,
+        back: args.exercise_content,
+        sourceTool: "sharpen",
+        domain: args.domain,
+      });
+    } catch (e) {
+      // Non-critical
+    }
+
     return {
       content: [
         {
@@ -382,9 +685,10 @@ export async function handleSharpen(args, extra) {
                 type: args.exercise_type,
                 content: args.exercise_content,
                 domain: args.domain,
+                timeLimit: "60 seconds",
               },
               instructions:
-                "Exercise loaded. The user should work through this, then call sharpen again with their response for scoring.",
+                "Exercise loaded. Present this to the user and have them work through it. Then call sharpen again with their response for scoring. If they skip, it's already queued in their companion app for later.",
             },
             null,
             2
@@ -406,6 +710,8 @@ export async function handleSharpen(args, extra) {
 }
 
 // ─── CONNECT ─────────────────────────────────────────────
+// The heartbeat tool. streak_status fires at session start.
+// Returns the "mirror moment" — identity, proof score, decay signals.
 
 export async function handleConnect(args, extra) {
   const userId = getUserId(extra);
@@ -491,7 +797,6 @@ export async function handleConnect(args, extra) {
           }
         }
 
-        // Find underrepresented areas
         const allDomains = [
           "marketing",
           "product-management",
@@ -554,8 +859,71 @@ export async function handleConnect(args, extra) {
         const userScore = await getUserScore(userId);
         const saveCount = await getSaveCount(userId);
 
-        const levelInfo = LEVELS[userScore?.level || 0];
+        const level = userScore?.level || 0;
+        const levelInfo = LEVELS[level];
         const streak = userScore?.streak_days || 0;
+        const proofScore = userScore?.proof_score || 1000;
+        const proofBandInfo = getBandForScore(proofScore);
+        const nextBandInfo = getNextBandDistance(proofScore);
+
+        // ── Ability Decay Detection ───────────────────
+        // Find abilities that haven't been exercised in 3+ days (spaced repetition nudge)
+        const abilities = userScore?.abilities || {};
+        const now = new Date();
+        const decayingAbilities = [];
+        const abilitySnapshot = {};
+
+        for (const [key, val] of Object.entries(abilities)) {
+          if (val?.score !== undefined && ABILITIES[key]) {
+            const lastUpdated = val.lastUpdated ? new Date(val.lastUpdated) : null;
+            const daysSince = lastUpdated
+              ? Math.floor((now - lastUpdated) / (1000 * 60 * 60 * 24))
+              : 999;
+
+            abilitySnapshot[key] = {
+              name: ABILITIES[key].shortName,
+              score: Math.round(val.score * 100) / 100,
+              daysSinceExercised: daysSince,
+              decaying: daysSince >= 3,
+            };
+
+            if (daysSince >= 3) {
+              decayingAbilities.push({
+                id: key,
+                name: ABILITIES[key].shortName,
+                score: Math.round(val.score * 100) / 100,
+                daysSince,
+              });
+            }
+          }
+        }
+
+        // Find strongest and weakest for the greeting
+        const abilityEntries = Object.entries(abilitySnapshot);
+        let strongest = null;
+        let weakest = null;
+        if (abilityEntries.length > 0) {
+          abilityEntries.sort((a, b) => b[1].score - a[1].score);
+          strongest = { id: abilityEntries[0][0], ...abilityEntries[0][1] };
+          weakest = {
+            id: abilityEntries[abilityEntries.length - 1][0],
+            ...abilityEntries[abilityEntries.length - 1][1],
+          };
+        }
+
+        // ── Learning Queue Count ──────────────────────
+        const queueCount = await getLearningQueueCount(userId).catch(() => 0);
+
+        // ── Prove history for this week ───────────────
+        const proveHistory = await getProveHistory(userId, 10);
+        const thisWeekProves = proveHistory.filter((p) => {
+          const d = new Date(p.created_at);
+          const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          return d >= weekAgo;
+        });
+        const weeklyProveEmoji = thisWeekProves
+          .map((p) => (p.correct ? "🟩" : "🟥"))
+          .join("");
 
         return {
           content: [
@@ -563,32 +931,38 @@ export async function handleConnect(args, extra) {
               type: "text",
               text: JSON.stringify(
                 {
-                  streak: {
-                    days: streak,
-                    message:
-                      streak >= 7
-                        ? `🔥 ${streak}-day streak. You're building a real habit.`
-                        : streak >= 3
-                        ? `${streak}-day streak. Consistency is where the compound gains come from.`
-                        : streak === 0
-                        ? "No active streak. Start one today — even a single save counts."
-                        : `${streak}-day streak. Keep going.`,
-                  },
-                  tier: {
-                    current: levelInfo?.tier || "Explorer",
-                    color: levelInfo?.color || "gray",
-                    level: userScore?.level || 0,
+                  greeting: {
+                    level,
                     levelName: levelInfo?.name || "Non-User",
+                    tier: levelInfo?.tier || "Explorer",
+                    tierColor: levelInfo?.color || "gray",
+                    proofScore,
+                    proofBand: proofBandInfo.band,
+                    proofBandLabel: proofBandInfo.label,
+                    nextBand: nextBandInfo.nextBand,
+                    nextBandDistance: nextBandInfo.distance,
+                    streak,
+                    strongest,
+                    weakest,
+                    decayingAbilities:
+                      decayingAbilities.length > 0 ? decayingAbilities : null,
                   },
                   stats: {
                     totalSaves: saveCount,
                     totalElevates: userScore?.total_elevates || 0,
                     totalProves: userScore?.total_proves || 0,
+                    weeklyProves: weeklyProveEmoji || null,
                   },
-                  credential: {
-                    shareUrl: `https://learntube.ai/credential/${userId}`,
-                    message: "Your living credential updates with every interaction.",
+                  abilities: abilitySnapshot,
+                  companionApp: {
+                    pendingItems: queueCount,
+                    message:
+                      queueCount > 0
+                        ? `${queueCount} items waiting in your companion app.`
+                        : null,
                   },
+                  instructions:
+                    "Present this as a warm, conversational 2-3 sentence greeting. Include: level name + tier, Proof Score with distance to next band, strongest ability, and any decaying abilities. If streak > 1, mention it. Then ask what they're working on today.",
                 },
                 null,
                 2

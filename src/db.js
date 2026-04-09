@@ -390,3 +390,108 @@ export async function getThemeClusters(userId) {
     .map(([tag, count]) => ({ tag, count, saveIds: tagSaves[tag] }))
     .sort((a, b) => b.count - a.count);
 }
+
+// ─── LEARNING QUEUE ──────────────────────────────────────
+
+export async function createLearningQueueItem(userId, {
+  type,
+  front,
+  back,
+  sourceTool,
+  sourceId,
+  domain,
+}) {
+  const { data, error } = await supabase
+    .from("learning_queue")
+    .insert({
+      user_id: userId,
+      type,
+      front,
+      back,
+      source_tool: sourceTool || null,
+      source_id: sourceId || null,
+      domain: domain || null,
+      status: "pending",
+      created_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function getLearningQueue(userId, { type, status = "pending", limit = 20 } = {}) {
+  let query = supabase
+    .from("learning_queue")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("status", status)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (type) query = query.eq("type", type);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+export async function getLearningQueueCount(userId) {
+  const { count, error } = await supabase
+    .from("learning_queue")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("status", "pending");
+
+  if (error) throw error;
+  return count || 0;
+}
+
+export async function updateLearningQueueStatus(itemId, status) {
+  const { data, error } = await supabase
+    .from("learning_queue")
+    .update({
+      status,
+      reviewed_at: status !== "pending" ? new Date().toISOString() : null,
+    })
+    .eq("id", itemId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+// ─── PROOF SCORE ──────────────────────────────────────────
+
+export async function updateProofScore(userId, newScore, newBand) {
+  const { error } = await supabase
+    .from("user_scores")
+    .update({
+      proof_score: newScore,
+      proof_band: newBand,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+
+  if (error) throw error;
+}
+
+// ─── PROVE RARITY STATS ──────────────────────────────────
+
+export async function getProveRarityForType(challengeType) {
+  // Get all prove results for this challenge type across all users
+  const { data, error } = await supabase
+    .from("prove_results")
+    .select("correct")
+    .eq("challenge_type", challengeType);
+
+  if (error || !data || data.length === 0) return null;
+
+  const total = data.length;
+  const correct = data.filter((r) => r.correct).length;
+  const catchRate = Math.round((correct / total) * 100);
+
+  return { catchRate, total };
+}

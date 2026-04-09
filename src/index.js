@@ -4,14 +4,15 @@
  * LearnTube AI Readiness MCP Server (Remote SSE)
  *
  * 5 tools that live inside Claude (and any MCP-compatible client):
- *   save     — Save insights to your knowledge graph
- *   elevate  — Get a brutally honest evaluation of your AI interaction
- *   prove    — Spot the Flaw challenges (Artifact Effect Gauntlet)
- *   sharpen  — Targeted micro-exercises for specific abilities
- *   connect  — Surface patterns and connections across your saves
+ *   save     — Save insights to your knowledge graph (variable rewards)
+ *   elevate  — Brutally honest AI performance evaluation (chains to sharpen)
+ *   prove    — Spot the Flaw challenges with Elo-rated Proof Score
+ *   sharpen  — Targeted micro-exercises for specific abilities (60s max)
+ *   connect  — Session-start heartbeat + knowledge graph connections
  *
  * Backend: Supabase (Postgres)
  * Framework: Framework A (AI-Augmented Performance, 8 abilities, 7 levels)
+ * Pedagogy: Bloom's Mastery, Tiny Habits, Variable Rewards, Spaced Repetition
  */
 
 import "dotenv/config";
@@ -33,10 +34,10 @@ import {
 function createServer() {
   const server = new McpServer({
     name: "learntube-ai-readiness",
-    version: "0.1.0",
+    version: "0.2.0",
   });
 
-  // SAVE
+  // SAVE — Variable rewards, flash card queuing, domain growth
   server.tool(
     "learntube_save",
     TOOL_DEFINITIONS.find((t) => t.name === "learntube_save").description,
@@ -44,23 +45,23 @@ function createServer() {
       insight: z
         .string()
         .describe(
-          "The specific insight, technique, or mental model to save. Should be concrete and reusable — not a summary of the conversation, but the distilled takeaway someone would want to recall later."
+          "The specific insight, technique, or mental model to save. Concrete and reusable — not a conversation summary."
         ),
       tags: z
         .array(z.string())
         .describe(
-          "2-5 tags categorizing this insight. Use domain tags (marketing, engineering, product), ability tags (delegation, evaluation, iteration), and topic tags."
+          "2-5 tags: domain tags (marketing, engineering), ability tags (delegation, evaluation), topic tags."
         ),
       domain: z
         .string()
         .describe(
-          "The professional domain this insight applies to (e.g., marketing, product-management, software-engineering, data-science, operations, general)."
+          "Professional domain (marketing, product-management, software-engineering, data-science, operations, general)."
         ),
       context: z
         .string()
         .optional()
         .describe(
-          "Brief context on how this insight emerged — what problem were they solving? This helps connect saves later."
+          "Brief context: what problem were they solving? Helps connect saves later."
         ),
       confidence: z
         .number()
@@ -68,38 +69,34 @@ function createServer() {
         .max(5)
         .optional()
         .describe(
-          "How confident is the user in this insight? 1 = speculative/exploring, 5 = battle-tested and validated."
+          "User's confidence in this insight. 1=speculative, 5=battle-tested. Infer from tone if not stated."
         ),
     },
     async (args, extra) => handleSave(args, extra)
   );
 
-  // ELEVATE
+  // ELEVATE — Formative evaluation, threshold proximity, chains to sharpen
   server.tool(
     "learntube_elevate",
     TOOL_DEFINITIONS.find((t) => t.name === "learntube_elevate").description,
     {
       task_description: z
         .string()
-        .describe(
-          "What the user was trying to accomplish in this session. Be specific about the goal, not just the topic."
-        ),
+        .describe("What the user was trying to accomplish. Be specific about the goal."),
       interaction_summary: z
         .string()
         .describe(
-          "Summary of how the interaction unfolded — what did the user ask for, how did they prompt, did they iterate, did they evaluate output critically? Include specific examples."
+          "How the interaction unfolded — prompts used, iteration patterns, evaluation behavior. Include specific examples."
         ),
       domain: z
         .string()
-        .describe(
-          "The professional domain of the task (marketing, engineering, product, etc.)"
-        ),
+        .describe("Professional domain of the task."),
       user_level_estimate: z
         .number()
         .min(0)
         .max(6)
         .describe(
-          "Your honest estimate of the user's AI performance level (0-6). 0=Non-User, 1=Experimenter, 2=Functional User, 3=Effective Practitioner, 4=Strategic Deployer, 5=System Architect, 6=Pioneer."
+          "Honest level estimate (0-6). 0=Non-User, 1=Experimenter, 2=Functional, 3=Practitioner, 4=Strategic, 5=Architect, 6=Pioneer."
         ),
       ability_scores: z
         .object({
@@ -113,38 +110,30 @@ function createServer() {
           A8: z.number().min(0).max(6).optional(),
         })
         .optional()
-        .describe(
-          "Scores for each Framework A ability observed in this interaction. Only include abilities that were actually exercised. Score 0-6."
-        ),
+        .describe("Scores for abilities actually observed this session. Only include what you saw."),
       what_they_did_well: z
         .string()
-        .describe(
-          "1-2 specific things the user did well, with quotes or examples from the interaction."
-        ),
+        .describe("1-2 specific things done well, with examples from the interaction."),
       what_they_missed: z
         .string()
         .describe(
-          "2-3 specific things a Level 4+ user would have done differently. Be CONCRETE."
+          "2-3 specific things a Level 4+ user would do differently. Be CONCRETE with examples."
         ),
       level_up_move: z
         .string()
-        .describe(
-          "The ONE single behavior change that would have the biggest impact on their next session."
-        ),
+        .describe("The ONE behavior change for biggest impact next session. Actionable tomorrow."),
     },
     async (args, extra) => handleElevate(args, extra)
   );
 
-  // PROVE
+  // PROVE — Elo-rated Spot the Flaw with calibration tracking
   server.tool(
     "learntube_prove",
     TOOL_DEFINITIONS.find((t) => t.name === "learntube_prove").description,
     {
       challenge_domain: z
         .string()
-        .describe(
-          "The domain to contextualize the challenge in (user's professional domain)."
-        ),
+        .describe("User's professional domain for challenge context."),
       challenge_type: z
         .enum([
           "polish_vs_substance",
@@ -153,29 +142,25 @@ function createServer() {
           "specific_vs_generic",
           "agreement_trap",
         ])
-        .describe("Which Artifact Effect trap to test. Rotate through them across sessions."),
+        .describe("Which Artifact Effect trap to test. Rotate across sessions."),
       user_choice: z.enum(["A", "B"]).describe("Which output the user chose."),
       user_confidence: z
         .number()
         .min(1)
         .max(5)
-        .describe(
-          "How confident the user is in their choice (1-5). The gap between confidence and correctness IS the calibration score."
-        ),
+        .describe("User's confidence in their choice (1-5). Gap between confidence and correctness = calibration."),
       correct: z
         .boolean()
-        .describe("Whether the user chose the right output."),
+        .describe("Whether the user chose the correct output."),
       reasoning_quality: z
         .enum(["no_reasoning", "surface", "partial", "deep"])
         .optional()
-        .describe(
-          "Quality of the user's reasoning for their choice."
-        ),
+        .describe("Quality of reasoning: no_reasoning=just picked, surface=style, partial=one issue, deep=core trap."),
     },
     async (args, extra) => handleProve(args, extra)
   );
 
-  // SHARPEN
+  // SHARPEN — 60-second micro-exercises, chains from elevate/prove
   server.tool(
     "learntube_sharpen",
     TOOL_DEFINITIONS.find((t) => t.name === "learntube_sharpen").description,
@@ -186,31 +171,25 @@ function createServer() {
       exercise_type: z
         .string()
         .describe(
-          "The type of micro-exercise: prompt_rewrite, task_triage, output_evaluation, iteration_challenge, thinking_extension, workflow_design."
+          "Exercise type: prompt_rewrite, task_triage, output_evaluation, iteration_challenge, thinking_extension, workflow_design, orchestration_scenario, teaching_exercise."
         ),
       exercise_content: z
         .string()
-        .describe(
-          "The actual exercise content — the scenario, the task, or the material the user works with."
-        ),
+        .describe("The exercise content — scenario, task, or material. Must be completable in 60 seconds."),
       user_response: z
         .string()
         .optional()
-        .describe("The user's response to the exercise."),
+        .describe("User's response to the exercise (for scoring)."),
       score: z
         .number()
         .min(0)
         .max(6)
         .optional()
-        .describe(
-          "Score for this exercise attempt (0-6, mapped to Framework A levels)."
-        ),
+        .describe("Score for this attempt (0-6, mapped to Framework A levels)."),
       feedback: z
         .string()
         .optional()
-        .describe(
-          "Specific feedback on their response — what was good, what to improve."
-        ),
+        .describe("Specific feedback on their response with concrete examples."),
       domain: z
         .string()
         .optional()
@@ -219,7 +198,7 @@ function createServer() {
     async (args, extra) => handleSharpen(args, extra)
   );
 
-  // CONNECT
+  // CONNECT — Session-start heartbeat + knowledge graph queries
   server.tool(
     "learntube_connect",
     TOOL_DEFINITIONS.find((t) => t.name === "learntube_connect").description,
@@ -232,19 +211,15 @@ function createServer() {
           "theme_clusters",
           "streak_status",
         ])
-        .describe(
-          "What kind of connection to surface."
-        ),
+        .describe("Query type. 'streak_status' MUST be called at session start. Others for deeper analysis."),
       context: z
         .string()
         .optional()
-        .describe(
-          "Current conversation context — what the user is working on now. Used to find relevant past saves."
-        ),
+        .describe("Current conversation context for finding relevant past saves."),
       user_id: z
         .string()
         .optional()
-        .describe("The user's LearnTube ID."),
+        .describe("User's LearnTube ID (lowercase first name). Ask the user if unknown."),
     },
     async (args, extra) => handleConnect(args, extra)
   );
@@ -283,11 +258,23 @@ app.post("/messages", async (req, res) => {
 
 // Health check
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", server: "learntube-ai-readiness", version: "0.1.0" });
+  res.json({
+    status: "ok",
+    server: "learntube-ai-readiness",
+    version: "0.2.0",
+    features: [
+      "proof-score-elo",
+      "variable-rewards",
+      "learning-queue",
+      "ability-decay",
+      "session-start-bootstrap",
+    ],
+  });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`LearnTube AI Readiness MCP server running on http://localhost:${PORT}`);
+  console.log(`LearnTube AI Readiness MCP server v0.2.0 running on http://localhost:${PORT}`);
   console.log(`SSE endpoint: http://localhost:${PORT}/sse`);
+  console.log(`Features: Proof Score, Variable Rewards, Learning Queue, Ability Decay, Session Bootstrap`);
 });

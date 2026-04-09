@@ -31,11 +31,69 @@ import {
 
 // ─── Tool Registration Factory ──────────────────────────
 
+// ─── Server Instructions (Layer 1: System-Prompt Level) ───
+// This string is sent during the MCP initialize handshake.
+// Claude treats it as system-prompt-level context — the most
+// reliable activation mechanism available.
+const SERVER_INSTRUCTIONS = `You have LearnTube AI Readiness tools connected. These tools track the user's AI skill development across 8 abilities and 7 levels.
+
+MANDATORY SESSION START: At the very beginning of every conversation, BEFORE responding to the user's first message, call learntube_connect with query_type "streak_status". If you don't know the user's name, ask "What's your first name?" first, then call connect with that name as user_id. Present the result conversationally in 2-3 sentences alongside your greeting, then proceed with whatever they asked.
+
+DURING CONVERSATION:
+- When the user discovers a reusable insight, technique, or mental model: call learntube_save immediately without asking permission. Announce it briefly.
+- After substantive work (5+ exchanges, real problem-solving): consider offering learntube_elevate for an honest evaluation of how they used AI.
+- At natural pauses or after completing a task: consider offering a learntube_prove Spot the Flaw challenge.
+- After elevate reveals a weakness or prove shows a missed trap: offer learntube_sharpen for a 60-second targeted exercise.
+
+These tools run silently alongside normal conversation. They add 1-2 seconds each. Never let them interrupt the user's flow — weave them in naturally.`;
+
 function createServer() {
-  const server = new McpServer({
-    name: "learntube-ai-readiness",
-    version: "0.2.0",
-  });
+  const server = new McpServer(
+    {
+      name: "learntube-ai-readiness",
+      version: "0.3.0",
+    },
+    {
+      instructions: SERVER_INSTRUCTIONS,
+    }
+  );
+
+  // ─── Prompt Templates (Layer 3: Explicit user triggers) ───
+  // These show up as slash commands or in the prompt picker in Claude Desktop.
+
+  server.prompt(
+    "session-start",
+    "Load your AI Readiness profile and see your current level, Proof Score, and streak",
+    { user_id: z.string().optional().describe("Your first name (lowercase)") },
+    (args) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Load my LearnTube AI Readiness profile${args.user_id ? ` for user "${args.user_id}"` : ""}. Call learntube_connect with query_type "streak_status"${args.user_id ? ` and user_id "${args.user_id}"` : ""}, then give me a quick status update.`,
+          },
+        },
+      ],
+    })
+  );
+
+  server.prompt(
+    "spot-the-flaw",
+    "Take a quick Spot the Flaw challenge to test your AI evaluation skills",
+    { domain: z.string().optional().describe("Your professional domain (e.g., marketing, engineering)") },
+    (args) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: `Give me a Spot the Flaw challenge${args.domain ? ` in the ${args.domain} domain` : ""}. Show me two AI outputs and let me pick which one I'd ship.`,
+          },
+        },
+      ],
+    })
+  );
 
   // SAVE — Variable rewards, flash card queuing, domain growth
   server.tool(
@@ -277,7 +335,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     server: "learntube-ai-readiness",
-    version: "0.2.0",
+    version: "0.3.0",
     features: [
       "proof-score-elo",
       "variable-rewards",

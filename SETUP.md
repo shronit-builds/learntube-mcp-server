@@ -39,6 +39,37 @@ That's it. No local install needed.
 
 Quit and reopen Claude Desktop. You should see a hammer icon with "5 tools" in the bottom-left of a new conversation.
 
+### Claude Code (CLI)
+
+If you're using Claude Code instead of Claude Desktop, add the MCP server with one command:
+
+```bash
+claude mcp add --transport sse learntube-ai-readiness https://coaching-mcp-v2-production-4a72.up.railway.app/sse
+```
+
+Or create a `.mcp.json` file in your project root:
+
+```json
+{
+  "mcpServers": {
+    "learntube-ai-readiness": {
+      "type": "sse",
+      "url": "https://coaching-mcp-v2-production-4a72.up.railway.app/sse"
+    }
+  }
+}
+```
+
+### Optional: Add Custom Instructions (recommended)
+
+For maximum reliability, add this one line to your Claude Desktop Custom Instructions (Settings → Custom Instructions):
+
+```
+At the start of every conversation, call learntube_connect with query_type "streak_status" to load my AI Readiness profile.
+```
+
+This ensures your profile loads in every chat, even when Claude is focused on your task. The MCP server already sends this instruction automatically, but this reinforces it.
+
 ---
 
 ## Step 2: Open the Dashboard

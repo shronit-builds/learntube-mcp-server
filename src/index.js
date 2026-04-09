@@ -27,6 +27,7 @@ import {
   handleProve,
   handleSharpen,
   handleConnect,
+  cleanupSession,
 } from "./handlers.js";
 
 // ─── Tool Registration Factory ──────────────────────────
@@ -360,6 +361,7 @@ app.get("/sse", async (req, res) => {
   transports[transport.sessionId] = transport;
 
   res.on("close", () => {
+    cleanupSession(transport.sessionId);
     delete transports[transport.sessionId];
   });
 

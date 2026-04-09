@@ -43,34 +43,52 @@ import {
 } from "./framework.js";
 
 // ─── Identity Resolution ─────────────────────────────────
-// Zero-friction identity: never block on knowing the user's name.
-// Priority: explicit user_id > session cache > MCP client metadata > env default > "anon"
-// If Claude learns the user's name mid-conversation, it starts passing it
-// and the session cache updates automatically. All prior "anon" data stays
-// under "anon" — migration is a Phase 1 concern.
-let _sessionUserId = null;
+// Zero-friction, per-session identity. Each SSE connection gets a unique
+// sessionId from the transport layer. Identity is cached per-session in a Map,
+// so concurrent users never cross-contaminate.
+//
+// Priority: explicit user_id > session cache > MCP metadata > env default > anon-{sessionId}
+//
+// Anonymous users get unique IDs (anon-{short-hash}) so their data never
+// collides. When Claude learns the real name, it starts passing it and all
+// FUTURE tool calls use the new identity. Prior anon data stays under the
+// anon ID — migration is a Phase 1 concern.
+
+const _sessionIdentities = new Map(); // sessionId → userId
 
 function getUserId(extra, args) {
+  // Derive a session key from the MCP transport for isolation
+  const sessionKey = extra?.sessionId || "_default";
+
   // 1. Explicit user_id in tool args (highest priority — Claude passes this)
   if (args?.user_id && args.user_id.trim()) {
-    _sessionUserId = args.user_id.toLowerCase().trim();
-    return _sessionUserId;
+    const uid = args.user_id.toLowerCase().trim();
+    _sessionIdentities.set(sessionKey, uid);
+    return uid;
   }
   // 2. Session cache (set by any previous tool call this session)
-  if (_sessionUserId) return _sessionUserId;
+  if (_sessionIdentities.has(sessionKey)) {
+    return _sessionIdentities.get(sessionKey);
+  }
   // 3. Extra metadata from MCP client (some clients pass user info)
   if (extra?.userId) {
-    _sessionUserId = extra.userId;
-    return _sessionUserId;
+    _sessionIdentities.set(sessionKey, extra.userId);
+    return extra.userId;
   }
   // 4. Env fallback (configured per deployment)
   if (process.env.DEFAULT_USER_ID) {
-    _sessionUserId = process.env.DEFAULT_USER_ID;
-    return _sessionUserId;
+    _sessionIdentities.set(sessionKey, process.env.DEFAULT_USER_ID);
+    return process.env.DEFAULT_USER_ID;
   }
-  // 5. Anonymous fallback — always works, never blocks
-  _sessionUserId = "anon";
-  return "anon";
+  // 5. Unique anonymous ID — uses session key fragment to avoid collisions
+  const anonId = `anon-${sessionKey.substring(0, 8)}`;
+  _sessionIdentities.set(sessionKey, anonId);
+  return anonId;
+}
+
+// Clean up identity when SSE connection closes
+export function cleanupSession(sessionId) {
+  _sessionIdentities.delete(sessionId);
 }
 
 // ─── SAVE ────────────────────────────────────────────────

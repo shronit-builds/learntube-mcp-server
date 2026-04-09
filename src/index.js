@@ -348,7 +348,7 @@ app.get("/health", (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`LearnTube AI Readiness MCP server v0.2.0 running on http://localhost:${PORT}`);
+  console.log(`LearnTube AI Readiness MCP server v0.3.0 running on http://localhost:${PORT}`);
   console.log(`SSE endpoint: http://localhost:${PORT}/sse`);
   console.log(`Features: Proof Score, Variable Rewards, Learning Queue, Ability Decay, Session Bootstrap`);
 });

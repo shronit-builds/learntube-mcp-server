@@ -42,23 +42,35 @@ import {
   checkMilestone,
 } from "./framework.js";
 
-// Derive userId from tool args first, then extra metadata, then env fallback.
-// In MCP, args.user_id is the primary source — Claude asks the user's name
-// and passes it with every tool call.
-let _sessionUserId = null; // Cache within a session after connect sets it
+// ─── Identity Resolution ─────────────────────────────────
+// Zero-friction identity: never block on knowing the user's name.
+// Priority: explicit user_id > session cache > MCP client metadata > env default > "anon"
+// If Claude learns the user's name mid-conversation, it starts passing it
+// and the session cache updates automatically. All prior "anon" data stays
+// under "anon" — migration is a Phase 1 concern.
+let _sessionUserId = null;
 
 function getUserId(extra, args) {
-  // 1. Explicit user_id in tool args (highest priority)
-  if (args?.user_id) {
+  // 1. Explicit user_id in tool args (highest priority — Claude passes this)
+  if (args?.user_id && args.user_id.trim()) {
     _sessionUserId = args.user_id.toLowerCase().trim();
     return _sessionUserId;
   }
-  // 2. Session cache (set by connect)
+  // 2. Session cache (set by any previous tool call this session)
   if (_sessionUserId) return _sessionUserId;
-  // 3. Extra metadata from MCP client
-  if (extra?.userId) return extra.userId;
-  // 4. Env fallback
-  return process.env.DEFAULT_USER_ID || "demo-user";
+  // 3. Extra metadata from MCP client (some clients pass user info)
+  if (extra?.userId) {
+    _sessionUserId = extra.userId;
+    return _sessionUserId;
+  }
+  // 4. Env fallback (configured per deployment)
+  if (process.env.DEFAULT_USER_ID) {
+    _sessionUserId = process.env.DEFAULT_USER_ID;
+    return _sessionUserId;
+  }
+  // 5. Anonymous fallback — always works, never blocks
+  _sessionUserId = "anon";
+  return "anon";
 }
 
 // ─── SAVE ────────────────────────────────────────────────
@@ -1010,9 +1022,10 @@ export async function handleConnect(args, extra) {
                         ? `${queueCount} items waiting in your companion app.`
                         : null,
                   },
+                  userId,
                   instructions: isNewUser
-                    ? "This is a NEW user — their first session ever. Welcome them warmly: 'Welcome to LearnTube AI Readiness! I'll be tracking how you use AI and helping you level up. Let's start — what are you working on today?' Do NOT recite stats or scores to a new user."
-                    : "Present this as a warm, conversational 2-3 sentence greeting. Include: level name + tier, Proof Score with distance to next band, strongest ability, and any decaying abilities. If streak > 1, mention it. If daysSinceElevate > 3 or is null, consider offering an elevate after substantive work this session. Then ask what they're working on today.",
+                    ? "This is a NEW user — their first session ever. Welcome them warmly: 'Welcome to LearnTube AI Readiness! I'll be tracking how you use AI and helping you level up. Let's start — what are you working on today?' Do NOT recite stats or scores to a new user. If their user_id is 'anon', casually ask their first name during the conversation so you can personalize future sessions — but do NOT block on this."
+                    : "Present this as a warm, conversational 2-3 sentence greeting. Include: level name + tier, Proof Score with distance to next band, strongest ability, and any decaying abilities. If streak > 1, mention it. If daysSinceElevate > 3 or is null, consider offering an elevate after substantive work this session. Then proceed with whatever they asked.",
                 },
                 null,
                 2

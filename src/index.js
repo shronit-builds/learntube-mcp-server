@@ -32,20 +32,50 @@ import {
 // ─── Tool Registration Factory ──────────────────────────
 
 // ─── Server Instructions (Layer 1: System-Prompt Level) ───
-// This string is sent during the MCP initialize handshake.
-// Claude treats it as system-prompt-level context — the most
-// reliable activation mechanism available.
-const SERVER_INSTRUCTIONS = `You have LearnTube AI Readiness tools connected. These tools track the user's AI skill development across 8 abilities and 7 levels.
+// Sent during MCP initialize handshake. Claude treats this as
+// system-prompt-level context — highest-priority activation mechanism.
+//
+// Design principles:
+// - Zero friction: never block on user identity, use "anon" if unknown
+// - Intent-triggered: any learning/growth/reflection language fires tools
+// - Liberal firing: let the server decide if action is needed, not Claude
+// - No interruption: weave tools into natural conversation flow
+const SERVER_INSTRUCTIONS = `You have LearnTube AI Readiness tools connected. These silently track the user's AI skill development across 8 abilities and 7 levels while they work.
 
-MANDATORY SESSION START: At the very beginning of every conversation, BEFORE responding to the user's first message, call learntube_connect with query_type "streak_status". If you don't know the user's name, ask "What's your first name?" first, then call connect with that name as user_id. Present the result conversationally in 2-3 sentences alongside your greeting, then proceed with whatever they asked.
+IDENTITY: For user_id, use the user's first name (lowercase) if you know it from context, their email, or any identifier available. If you truly don't know, use "anon" — NEVER interrupt the conversation to ask for a name. If you learn their name later in conversation, start passing it as user_id in subsequent tool calls. The system handles identity gracefully.
 
-DURING CONVERSATION:
-- When the user discovers a reusable insight, technique, or mental model: call learntube_save immediately without asking permission. Announce it briefly.
-- After substantive work (5+ exchanges, real problem-solving): consider offering learntube_elevate for an honest evaluation of how they used AI.
-- At natural pauses or after completing a task: consider offering a learntube_prove Spot the Flaw challenge.
-- After elevate reveals a weakness or prove shows a missed trap: offer learntube_sharpen for a 60-second targeted exercise.
+SESSION START: At the very beginning of every conversation, BEFORE responding to the user's first message, call learntube_connect with query_type "streak_status". Present the result conversationally in 2-3 sentences alongside your greeting, then proceed with whatever they asked.
 
-These tools run silently alongside normal conversation. They add 1-2 seconds each. Never let them interrupt the user's flow — weave them in naturally.`;
+SAVE — fire immediately (no permission needed) when:
+- The user discovers an insight, technique, pattern, or mental model
+- A useful framework, principle, or reusable takeaway emerges
+- The user has a realization or "aha moment"
+- You generate advice the user explicitly values or agrees with
+
+ELEVATE — offer after substantive work sessions when:
+- The user says "how did I do", "evaluate me", "how am I doing", "am I improving"
+- A real task is completed (5+ substantive exchanges)
+- The user reflects on their own AI usage or asks for feedback
+- Words like "review", "assess", "feedback on my approach" appear
+
+PROVE — offer a Spot the Flaw challenge when:
+- There's a natural pause or transition in conversation
+- The user says "test me", "challenge me", "how sharp am I"
+- After an elevate reveals weak evaluation skills
+- The user questions AI output quality or reliability
+
+CONNECT — call (beyond session start) when:
+- The user asks "how am I doing", "my progress", "my level", "my score"
+- Words like "learn", "improve", "grow", "get better", "develop", "skill" appear in a self-reflective context
+- The user's current work might connect to past saved insights (use query_type "related_saves")
+- The user asks about their strengths, weaknesses, or growth areas
+
+SHARPEN — offer a 60-second exercise when:
+- Elevate identifies a weak ability or prove reveals a failed trap
+- The user says "practice", "exercise", "drill", "train", "work on my [ability]"
+- The user explicitly asks to improve a specific skill
+
+These tools are lightweight (1-2 seconds each). Fire them liberally — the server decides whether action is needed. Never let them interrupt the user's primary task flow.`;
 
 function createServer() {
   const server = new McpServer(
@@ -64,14 +94,14 @@ function createServer() {
   server.prompt(
     "session-start",
     "Load your AI Readiness profile and see your current level, Proof Score, and streak",
-    { user_id: z.string().optional().describe("Your first name (lowercase)") },
-    (args) => ({
+    {},
+    () => ({
       messages: [
         {
           role: "user",
           content: {
             type: "text",
-            text: `Load my LearnTube AI Readiness profile${args.user_id ? ` for user "${args.user_id}"` : ""}. Call learntube_connect with query_type "streak_status"${args.user_id ? ` and user_id "${args.user_id}"` : ""}, then give me a quick status update.`,
+            text: "Load my LearnTube AI Readiness profile. Call learntube_connect with query_type \"streak_status\" and give me a quick status update.",
           },
         },
       ],
@@ -81,14 +111,31 @@ function createServer() {
   server.prompt(
     "spot-the-flaw",
     "Take a quick Spot the Flaw challenge to test your AI evaluation skills",
-    { domain: z.string().optional().describe("Your professional domain (e.g., marketing, engineering)") },
-    (args) => ({
+    {},
+    () => ({
       messages: [
         {
           role: "user",
           content: {
             type: "text",
-            text: `Give me a Spot the Flaw challenge${args.domain ? ` in the ${args.domain} domain` : ""}. Show me two AI outputs and let me pick which one I'd ship.`,
+            text: "Give me a Spot the Flaw challenge. Show me two AI outputs for the same task and let me pick which one I'd actually ship.",
+          },
+        },
+      ],
+    })
+  );
+
+  server.prompt(
+    "how-am-i-doing",
+    "See your AI skill progress, strengths, weaknesses, and growth trajectory",
+    {},
+    () => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: "How am I doing with my AI skills? Show me my progress, strengths, and where I need to improve.",
           },
         },
       ],
@@ -132,7 +179,7 @@ function createServer() {
       user_id: z
         .string()
         .optional()
-        .describe("User's LearnTube ID. Pass the same ID from the session-start connect call."),
+        .describe("User identity — name, email, or any known identifier. Omit if unknown."),
     },
     async (args, extra) => handleSave(args, extra)
   );
@@ -187,7 +234,7 @@ function createServer() {
       user_id: z
         .string()
         .optional()
-        .describe("User's LearnTube ID. Pass the same ID from the session-start connect call."),
+        .describe("User identity — name, email, or any known identifier. Omit if unknown."),
     },
     async (args, extra) => handleElevate(args, extra)
   );
@@ -225,7 +272,7 @@ function createServer() {
       user_id: z
         .string()
         .optional()
-        .describe("User's LearnTube ID. Pass the same ID from the session-start connect call."),
+        .describe("User identity — name, email, or any known identifier. Omit if unknown."),
     },
     async (args, extra) => handleProve(args, extra)
   );
@@ -267,7 +314,7 @@ function createServer() {
       user_id: z
         .string()
         .optional()
-        .describe("User's LearnTube ID. Pass the same ID from the session-start connect call."),
+        .describe("User identity — name, email, or any known identifier. Omit if unknown."),
     },
     async (args, extra) => handleSharpen(args, extra)
   );
@@ -293,7 +340,7 @@ function createServer() {
       user_id: z
         .string()
         .optional()
-        .describe("User's LearnTube ID (lowercase first name). Ask the user if unknown."),
+        .describe("User identity — name, email, or any known identifier. Omit if unknown; server handles anonymous users."),
     },
     async (args, extra) => handleConnect(args, extra)
   );

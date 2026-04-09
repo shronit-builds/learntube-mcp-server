@@ -1,0 +1,18 @@
+{
+  "name": "learntube-ai-readiness-mcp",
+  "version": "0.1.0",
+  "description": "LearnTube AI Readiness MCP Server — measures and develops AI performance through save, elevate, prove, sharpen, and connect tools",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@supabase/supabase-js": "^2.49.4",
+    "dotenv": "^16.4.7",
+    "express": "^5.2.1",
+    "zod": "^3.24.2"
+  }
+}

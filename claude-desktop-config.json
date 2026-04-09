@@ -1,0 +1,13 @@
+{
+  "_instructions": "Add the 'learntube-ai-readiness' entry below into your Claude Desktop config. On Mac: ~/Library/Application Support/Claude/claude_desktop_config.json. On Windows: %APPDATA%/Claude/claude_desktop_config.json. Merge with any existing mcpServers. Update the 'args' path to where you cloned this repo.",
+  "mcpServers": {
+    "learntube-ai-readiness": {
+      "command": "node",
+      "args": ["/Users/YOUR_USERNAME/path-to/learntube-mcp-server/src/index.js"],
+      "env": {
+        "SUPABASE_URL": "https://ctindecnqexjzwteigff.supabase.co",
+        "SUPABASE_SERVICE_KEY": "YOUR_SERVICE_ROLE_KEY_HERE"
+      }
+    }
+  }
+}

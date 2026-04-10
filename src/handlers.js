@@ -286,7 +286,7 @@ export async function handleSave(args, extra) {
         .map((s) => ({
           id: s.id,
           insight: s.insight.substring(0, 100),
-          sharedTags: s.tags.filter((t) => tags.includes(t)),
+          sharedTags: (s.tags || []).filter((t) => tags.includes(t)),
         }));
 
       // Create edges for strong connections (2+ shared tags)
@@ -393,6 +393,7 @@ export async function handleBatchSave(args, extra) {
   const userId = getUserId(extra, args);
   const sessionKey = extra?.sessionId || "_default";
   const autoConnect = await ensureConnected(sessionKey, userId);
+  recordToolCall(sessionKey, "save"); // Count batch as one tool call
 
   try {
     const results = [];
@@ -409,7 +410,10 @@ export async function handleBatchSave(args, extra) {
         confidence: item.confidence,
       });
 
-      recordToolCall(sessionKey, "save");
+      // Increment save count per item (but not toolCalls)
+      const st = getSessionState(sessionKey);
+      st.saveCount++;
+      st.lastSaveTime = Date.now();
 
       // Create flash card for each
       try {
@@ -1157,6 +1161,7 @@ export async function handleConnect(args, extra) {
                     related.length > 0
                       ? `Found ${related.length} related insights from your knowledge graph. Your past work connects to what you're doing now.`
                       : "No closely related saves yet. This might be a new domain for you — save insights from this session to start building the thread.",
+                  ...buildSessionMeta(sessionKey),
                 },
                 null,
                 2
@@ -1186,6 +1191,7 @@ export async function handleConnect(args, extra) {
                     progress.length > 0
                       ? `${progress.length} evaluations tracked. Your ability profile is sharpening with each session.`
                       : "No evaluations yet. Run 'elevate' after your next real task to start tracking progress.",
+                  ...buildSessionMeta(sessionKey),
                 },
                 null,
                 2
@@ -1230,6 +1236,7 @@ export async function handleConnect(args, extra) {
                     gaps.length > 0
                       ? `Gaps detected in: ${gaps.join(", ")}. These are domains where you have few or no saved insights.`
                       : "Broad coverage across domains. Your knowledge graph is diversifying.",
+                  ...buildSessionMeta(sessionKey),
                 },
                 null,
                 2
@@ -1256,6 +1263,7 @@ export async function handleConnect(args, extra) {
                           .map((c) => `${c.tag} (${c.count} saves)`)
                           .join(", ")}`
                       : "Not enough saves yet to identify themes. Keep saving — patterns emerge after ~20 saves.",
+                  ...buildSessionMeta(sessionKey),
                 },
                 null,
                 2

@@ -261,7 +261,7 @@ export async function handleSave(args, extra) {
     const milestone = checkMilestone(saveCount);
 
     // Domain growth: how deep is the user going in this domain?
-    const domainSaves = await getSaves(userId, { domain: args.domain, limit: 50 });
+    const domainSaves = await getSaves(userId, { domain, limit: 50 });
     const domainCount = domainSaves.length;
     const recentTopics = [...new Set(domainSaves.slice(0, 10).flatMap((s) => s.tags || []))].slice(0, 5);
 
@@ -270,15 +270,15 @@ export async function handleSave(args, extra) {
       recentTopics,
       message:
         domainCount >= 10
-          ? `${domainCount} insights in ${args.domain}. Your most frequent themes: ${recentTopics.join(", ")}. This is becoming a real knowledge base.`
-          : `${domainCount} insight${domainCount === 1 ? "" : "s"} in ${args.domain} so far. After 10, patterns start emerging.`,
+          ? `${domainCount} insights in ${domain}. Your most frequent themes: ${recentTopics.join(", ")}. This is becoming a real knowledge base.`
+          : `${domainCount} insight${domainCount === 1 ? "" : "s"} in ${domain} so far. After 10, patterns start emerging.`,
     };
 
     // Auto-connect: find related saves by overlapping tags
     let connections = [];
     if (saveCount > 3) {
       const related = await getSaves(userId, {
-        tags: args.tags,
+        tags,
         limit: 5,
       });
       connections = related
@@ -286,7 +286,7 @@ export async function handleSave(args, extra) {
         .map((s) => ({
           id: s.id,
           insight: s.insight.substring(0, 100),
-          sharedTags: s.tags.filter((t) => args.tags.includes(t)),
+          sharedTags: s.tags.filter((t) => tags.includes(t)),
         }));
 
       // Create edges for strong connections (2+ shared tags)
@@ -312,7 +312,7 @@ export async function handleSave(args, extra) {
         ? `You were working on ${args.context.substring(0, 60)}. What was the key technique you discovered that you'd use again?`
         : args.insight.length > 40
           ? `When would you apply this approach: "${insightPreview}..."?`
-          : `How would you apply this in your next ${args.domain} task: "${insightPreview}"?`;
+          : `How would you apply this in your next ${domain} task: "${insightPreview}"?`;
 
       await createLearningQueueItem(userId, {
         type: "flash_card",
@@ -320,7 +320,7 @@ export async function handleSave(args, extra) {
         back: args.insight,
         sourceTool: "save",
         sourceId: save.id,
-        domain: args.domain,
+        domain,
       });
     } catch (e) {
       // Non-critical — don't fail the save if queue insert fails
@@ -428,6 +428,7 @@ export async function handleBatchSave(args, extra) {
     }
 
     const saveCount = await getSaveCount(userId);
+    const streak = await updateStreak(userId);
     const milestone = checkMilestone(saveCount);
 
     return {

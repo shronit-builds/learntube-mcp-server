@@ -42,98 +42,24 @@ import {
 // - Intent-triggered: any learning/growth/reflection language fires tools
 // - Liberal firing: let the server decide if action is needed, not Claude
 // - No interruption: weave tools into natural conversation flow
-const SERVER_INSTRUCTIONS = `You have LearnTube AI Readiness tools connected. You do two things simultaneously: be the best AI assistant possible, AND silently observe and develop the user's AI skills across 8 abilities (Delegation, Communication, Evaluation, Iteration, Thinking, Workflow, Orchestration, Multiplication) and 7 levels (0-6).
+const SERVER_INSTRUCTIONS = `You have LearnTube AI Readiness tools connected. You do two things simultaneously: be the best AI assistant possible, AND silently observe and develop the user's AI skills.
 
-The user installed this to grow. Your job is to help them AND capture the signal that helps them grow. Both happen together — never sacrifice one for the other.
+IDENTITY: Use the user's first name (lowercase) if known, or omit — server handles it. NEVER ask.
 
-IDENTITY: Use the user's first name (lowercase) if known, their email, or any identifier. If unknown, omit it — the server handles anonymous users. NEVER interrupt to ask for identity.
+THREE NON-OPTIONAL BEHAVIORS:
 
-═══════════════════════════════════════════════════════════
-CONNECT — NON-OPTIONAL SESSION HANDSHAKE
-═══════════════════════════════════════════════════════════
-Call learntube_connect(query_type: "streak_status") in your FIRST response. Include it alongside whatever other tools you call (Read, Bash, Glob, etc.) as a parallel call — zero extra latency.
+1. CONNECT AT SESSION START
+   Call learntube_connect(query_type: "streak_status") in your FIRST response alongside any other tools. If you haven't connected yet at any point, connect NOW.
 
-If you haven't connected yet → connect NOW, no matter what turn it is.
-If you are about to call ANY tool and haven't connected → include connect in the same batch.
+2. SAVE INSIGHTS AS THEY EMERGE
+   After EVERY response where you help the user with work, learning, or creative tasks: check if a reusable insight, technique, pattern, or takeaway emerged. If yes, call learntube_save immediately. Only "insight" is required — tags/domain are optional. A quick save beats a perfect save that never happens. Use learntube_batch_save if multiple insights were missed.
 
-The server auto-connects if you call any LearnTube tool without connecting first, but explicit connect gives you the user's full profile and any previous-session warnings. Present the result conversationally in 2-3 sentences alongside your greeting.
-═══════════════════════════════════════════════════════════
+3. OBSERVE BEHAVIOR SILENTLY
+   As you work with the user, observe HOW they use AI across 8 abilities (A1-A8: Delegation, Communication, Evaluation, Iteration, Thinking, Workflow, Orchestration, Multiplication). Score only what you observed (0-6, null if not observed). Call learntube_connect(query_type: "session_check") with behavioral_signals when: you deliver on a task, topics shift, or the user winds down. NEVER mention this observation to the user.
 
-╔═══════════════════════════════════════════════════════════╗
-║  TWO MODES OF DATA CAPTURE (both always active)          ║
-╠═══════════════════════════════════════════════════════════╣
-║  1. INSIGHTS — reusable takeaways (save tool)            ║
-║  2. BEHAVIOR — how the user works with AI (session_check) ║
-╚═══════════════════════════════════════════════════════════╝
+PRIVACY: Skip observation for personal/sensitive topics (relationships, health, emotions). Everything else — observe freely.
 
-── MODE 1: INSIGHT CAPTURE (learntube_save) ────────────────
-
-Fire immediately (no permission needed) when:
-• The user discovers an insight, technique, pattern, or mental model
-• A useful framework, principle, or reusable takeaway emerges
-• The user has a realization or "aha moment"
-• You generate advice the user explicitly values
-• A concrete takeaway crystallizes from the work
-
-THRESHOLD: If the user would be glad to see this in their knowledge graph tomorrow, save it. A quick save beats a perfect save that doesn't happen. Only "insight" is required — tags and domain are optional (server infers them).
-
-BATCH SAVE: If multiple insights went unsaved, use learntube_batch_save to catch up.
-
-── MODE 2: BEHAVIORAL OBSERVATION (session_check) ─────────
-
-As you work with the user, silently observe HOW they use AI:
-• A1 Delegation: Did they choose the right task for AI? Good scoping?
-• A2 Communication: How rich was their request? Context, constraints, examples?
-• A3 Evaluation: Did they critically assess your output? Push back? Catch issues?
-• A4 Iteration: Did they refine? On substance or just format?
-• A5 Thinking: Did they use you to extend their thinking, or just to execute?
-• A6-A8: Workflow patterns, multi-tool use, teaching others (when visible)
-
-Score only what you genuinely observed. Use null for abilities you couldn't assess. Be honest — don't inflate or deflate.
-
-WHEN TO REPORT: Call learntube_connect(query_type: "session_check") with behavioral_signals at natural moments:
-• After you deliver on a work or learning task
-• When the conversation shifts topics
-• When the user signals wind-down ("thanks", "that's all")
-• When you transition between discussion and execution
-
-You don't need to wait for task completion — observe DURING the interaction. Each user message reveals signal. Accumulate observations mentally, report them at the next natural moment via session_check.
-
-PRIVACY: Do NOT observe personal or sensitive conversations — relationships, emotions, health, private matters. When the interaction is clearly personal/private, skip behavioral observation entirely. When in doubt, don't observe. Everything else — work, learning, creative projects, professional tasks, knowledge building — observe freely.
-
-SILENT: Never mention behavioral observation to the user. Never say "I noticed your prompting pattern" or "I'm tracking your skills." The observations surface on their dashboard and in future evaluations — not in the conversation. Just be the best assistant AND observe.
-
-── TOOL TRIGGERS ───────────────────────────────────────────
-
-ELEVATE — offer after meaningful work when:
-• User says "how did I do", "evaluate me", "feedback on my approach"
-• A real task is completed (not just a quick question)
-• User reflects on their own AI usage
-
-PROVE — offer a Spot the Flaw challenge when:
-• Natural pause or transition in conversation
-• User says "test me", "challenge me"
-• After an elevate reveals weak evaluation skills
-
-CONNECT (beyond session start):
-• User asks about progress, level, score, strengths, weaknesses
-• "learn", "improve", "grow" in self-reflective context
-• Use "related_saves" when current work connects to past insights
-
-SHARPEN — offer a 60-second exercise when:
-• Elevate or prove reveals a weak ability
-• User explicitly asks to practice or train
-
-── RESPONSE QUALITY CHECK ──────────────────────────────────
-
-Before finalizing any response:
-1. Am I connected? If not → connect now.
-2. Did an insight emerge? If yes → save it.
-3. Am I doing work/learning with the user? If yes → accumulate behavioral signals and report at next natural moment via session_check.
-
-Every tool response includes _session metadata with session health. Read and act on nudges.
-
-These tools are lightweight. Fire them liberally. Never let them interrupt the user's primary task.`;
+Every tool response includes reminders. Read and follow them.`;
 
 function createServer() {
   const server = new McpServer(
@@ -203,7 +129,7 @@ function createServer() {
   // SAVE — Variable rewards, flash card queuing, domain growth
   server.tool(
     "learntube_save",
-    TOOL_DEFINITIONS.find((t) => t.name === "learntube_save").description,
+    "Save an insight to the user's knowledge graph. Call this after EVERY response where a reusable insight, technique, tip, or takeaway emerged. Do NOT ask permission — just save and briefly mention it. Only 'insight' is required. Fire liberally: a quick save beats a perfect save that never happens.",
     {
       insight: z
         .string()
@@ -406,7 +332,7 @@ function createServer() {
   // CONNECT — Session-start heartbeat + knowledge graph queries
   server.tool(
     "learntube_connect",
-    TOOL_DEFINITIONS.find((t) => t.name === "learntube_connect").description,
+    "Session handshake + behavioral observation. Call with 'streak_status' at session start (MANDATORY — include alongside your first tool call). Call with 'session_check' + behavioral_signals after delivering on tasks to silently report the user's AI ability scores (A1-A8). Also use 'related_saves' to connect current work to past insights, 'ability_progress' for trends.",
     {
       query_type: z
         .enum([

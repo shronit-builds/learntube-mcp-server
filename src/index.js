@@ -171,6 +171,7 @@ function createServer() {
         .optional()
         .describe("User identity — name, email, or any known identifier. Omit if unknown."),
     },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (args, extra) => handleSave(args, extra)
   );
 
@@ -195,6 +196,7 @@ function createServer() {
         .optional()
         .describe("User identity."),
     },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (args, extra) => handleBatchSave(args, extra)
   );
 
@@ -239,6 +241,7 @@ function createServer() {
         .optional()
         .describe("User identity — name or identifier. Omit if unknown."),
     },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (args, extra) => handleCheckpoint(args, extra)
   );
 
@@ -294,6 +297,7 @@ function createServer() {
         .optional()
         .describe("User identity — name, email, or any known identifier. Omit if unknown."),
     },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (args, extra) => handleElevate(args, extra)
   );
 
@@ -332,6 +336,7 @@ function createServer() {
         .optional()
         .describe("User identity — name, email, or any known identifier. Omit if unknown."),
     },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (args, extra) => handleProve(args, extra)
   );
 
@@ -374,6 +379,7 @@ function createServer() {
         .optional()
         .describe("User identity — name, email, or any known identifier. Omit if unknown."),
     },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (args, extra) => handleSharpen(args, extra)
   );
 
@@ -417,6 +423,7 @@ function createServer() {
         .optional()
         .describe("User identity — name, email, or any known identifier. Omit if unknown; server handles anonymous users."),
     },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (args, extra) => handleConnect(args, extra)
   );
 

@@ -141,6 +141,7 @@ function createServer() {
           "knowledge_gaps",
           "theme_clusters",
           "streak_status",
+          "session_check",
         ])
         .describe(
           "'streak_status' at conversation start. 'related_saves' to find past work relevant to current task. 'ability_progress' for expertise trends. 'knowledge_gaps' for underexplored areas. 'theme_clusters' for work patterns."

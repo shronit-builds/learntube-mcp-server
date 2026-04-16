@@ -261,25 +261,33 @@ export async function handleSave(args, extra) {
 
     // ── Derivative Processing ──────────────────────────
     // This is where raw saves become high-value knowledge atoms.
-    // Every save triggers principle extraction, deep connection
-    // finding, gap detection, and multi-type flash card generation.
+    // Wrapped in its own try/catch so a timeout here doesn't
+    // kill the save response (the DB write already succeeded).
 
-    const principle = extractPrinciple(args.insight);
-    const connections = await findDeepConnections(userId, args.insight, tags, save.id);
-    const gaps = await detectKnowledgeGaps(userId, domain, tags);
+    let principle = { type: "insight", distilled: args.insight.substring(0, 150) };
+    let connections = [];
+    let gaps = [];
+    let domainCount = 0;
+    let domainTopics = [];
     const milestone = checkMilestone(saveCount);
 
-    // Create graph edges for strong connections
-    for (const conn of connections) {
-      if (conn.relevanceScore >= 0.5) {
-        await createEdge(save.id, conn.id, "semantic_match").catch(() => {});
-      }
-    }
+    try {
+      principle = extractPrinciple(args.insight);
+      connections = await findDeepConnections(userId, args.insight, tags, save.id);
+      gaps = await detectKnowledgeGaps(userId, domain, tags);
 
-    // Domain growth analysis
-    const domainSaves = await getSaves(userId, { domain, limit: 50 });
-    const domainCount = domainSaves.length;
-    const domainTopics = [...new Set(domainSaves.slice(0, 10).flatMap((s) => s.tags || []))].slice(0, 5);
+      // Create graph edges for strong connections
+      for (const conn of connections) {
+        if (conn.relevanceScore >= 0.5) {
+          await createEdge(save.id, conn.id, "semantic_match").catch(() => {});
+        }
+      }
+
+      // Domain growth analysis
+      const domainSaves = await getSaves(userId, { domain, limit: 50 });
+      domainCount = domainSaves.length;
+      domainTopics = [...new Set(domainSaves.slice(0, 10).flatMap((s) => s.tags || []))].slice(0, 5);
+    } catch (e) { /* derivative processing non-critical — save already succeeded */ }
 
     // ── Flash Cards (Multiple Types) ──────────────────
     const flashCards = generateFlashCards(args.insight, principle, connections, args.context, domain);
@@ -882,7 +890,7 @@ async function findDeepConnections(userId, insight, tags, excludeId) {
     if (relevanceScore > 0.2) {
       scored.push({
         id: save.id,
-        insight: save.insight.substring(0, 120),
+        insight: (save.insight || "").substring(0, 120),
         domain: save.domain,
         tags: save.tags,
         sharedTags: (save.tags || []).filter((t) => tags.includes(t)),
@@ -985,6 +993,9 @@ function generateFlashCards(insight, principle, connections, context, domain) {
  * Used by handleRecall to build a "current understanding" paragraph.
  */
 function synthesizeKnowledge(saves, topic) {
+  // Filter out any saves with null/missing insight text
+  saves = saves.filter((s) => s.insight);
+
   if (saves.length === 0) {
     return { summary: null, themes: [], timeline: [] };
   }

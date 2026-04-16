@@ -259,78 +259,71 @@ export async function handleSave(args, extra) {
     const saveCount = await getSaveCount(userId);
     const streak = await updateStreak(userId);
 
-    // ── Variable Reward Layer ──────────────────────────
+    // ── Derivative Processing ──────────────────────────
+    // This is where raw saves become high-value knowledge atoms.
+    // Every save triggers principle extraction, deep connection
+    // finding, gap detection, and multi-type flash card generation.
 
-    // Check for milestone (variable reward: sometimes just a save, sometimes a milestone)
+    const principle = extractPrinciple(args.insight);
+    const connections = await findDeepConnections(userId, args.insight, tags, save.id);
+    const gaps = await detectKnowledgeGaps(userId, domain, tags);
     const milestone = checkMilestone(saveCount);
 
-    // Domain growth: how deep is the user going in this domain?
-    const domainSaves = await getSaves(userId, { domain, limit: 50 });
-    const domainCount = domainSaves.length;
-    const recentTopics = [...new Set(domainSaves.slice(0, 10).flatMap((s) => s.tags || []))].slice(0, 5);
-
-    const domainGrowth = {
-      totalInDomain: domainCount,
-      recentTopics,
-      message:
-        domainCount >= 10
-          ? `${domainCount} insights in ${domain}. Your most frequent themes: ${recentTopics.join(", ")}. This is becoming a real knowledge base.`
-          : `${domainCount} insight${domainCount === 1 ? "" : "s"} in ${domain} so far. After 10, patterns start emerging.`,
-    };
-
-    // Auto-connect: find related saves by overlapping tags
-    let connections = [];
-    if (saveCount > 3) {
-      const related = await getSaves(userId, {
-        tags,
-        limit: 5,
-      });
-      connections = related
-        .filter((s) => s.id !== save.id)
-        .map((s) => ({
-          id: s.id,
-          insight: s.insight.substring(0, 100),
-          sharedTags: (s.tags || []).filter((t) => tags.includes(t)),
-        }));
-
-      // Create edges for strong connections (2+ shared tags)
-      for (const conn of connections) {
-        if (conn.sharedTags.length >= 2) {
-          await createEdge(save.id, conn.id, "tag_overlap").catch(() => {});
-        }
+    // Create graph edges for strong connections
+    for (const conn of connections) {
+      if (conn.relevanceScore >= 0.5) {
+        await createEdge(save.id, conn.id, "semantic_match").catch(() => {});
       }
     }
 
-    // Determine reward magnitude for the response
-    let rewardType = "standard"; // standard | connection | milestone
-    if (milestone.hit) rewardType = "milestone";
-    else if (connections.length > 0 && connections[0].sharedTags.length >= 2) rewardType = "connection";
+    // Domain growth analysis
+    const domainSaves = await getSaves(userId, { domain, limit: 50 });
+    const domainCount = domainSaves.length;
+    const domainTopics = [...new Set(domainSaves.slice(0, 10).flatMap((s) => s.tags || []))].slice(0, 5);
 
-    // ── Flash Card for Companion App ──────────────────
-    // Every save becomes a learning queue item the user can review later
-    try {
-      // Generate a flash card that tests application, not just recall.
-      // Use the insight itself to derive a question about when/how to apply it.
-      const insightPreview = args.insight.substring(0, 80);
-      const flashFront = args.context
-        ? `You were working on ${args.context.substring(0, 60)}. What was the key technique you discovered that you'd use again?`
-        : args.insight.length > 40
-          ? `When would you apply this approach: "${insightPreview}..."?`
-          : `How would you apply this in your next ${domain} task: "${insightPreview}"?`;
-
-      await createLearningQueueItem(userId, {
-        type: "flash_card",
-        front: flashFront,
-        back: args.insight,
-        sourceTool: "save",
-        sourceId: save.id,
-        domain,
-      });
-    } catch (e) {
-      // Non-critical — don't fail the save if queue insert fails
+    // ── Flash Cards (Multiple Types) ──────────────────
+    const flashCards = generateFlashCards(args.insight, principle, connections, args.context, domain);
+    let cardsGenerated = 0;
+    for (const card of flashCards) {
+      try {
+        await createLearningQueueItem(userId, {
+          type: "flash_card",
+          front: card.front,
+          back: card.back,
+          sourceTool: "save",
+          sourceId: save.id,
+          domain,
+        });
+        cardsGenerated++;
+      } catch (e) { /* non-critical */ }
     }
 
-    // ── Build Response ────────────────────────────────
+    // ── Silent A8 Micro-Update ────────────────────────
+    // Saving knowledge = knowledge multiplication behavior.
+    // Tiny EMA nudge so the profile reflects learning habits.
+    try {
+      await applyBehavioralSignals(userId, {
+        signals: { A8: Math.min(saveCount >= 20 ? 3 : saveCount >= 10 ? 2 : 1, 3) },
+      });
+    } catch (e) { /* non-critical */ }
+
+    // ── Build Enhanced Response ────────────────────────
+    // Response gives Claude everything it needs to present a
+    // concise 2-3 line confirmation with derivative value.
+
+    const responseMessage = (() => {
+      let msg = `✓ Saved — ${principle.type}: "${principle.distilled.substring(0, 80)}"`;
+      if (connections.length > 0) {
+        msg += `\n↳ Connects to: "${connections[0].insight.substring(0, 60)}..." (${connections[0].sharedTags.join(", ") || "related topic"})`;
+      }
+      if (milestone.hit) {
+        msg += `\n🏆 ${milestone.message}`;
+      }
+      if (gaps.length > 0 && saveCount >= 5) {
+        msg += `\n💡 Adjacent topic to explore: ${gaps[0].topic}`;
+      }
+      return msg;
+    })();
 
     return {
       content: [
@@ -342,31 +335,34 @@ export async function handleSave(args, extra) {
               saveId: save.id,
               totalSaves: saveCount,
               streak: streak.streakDays,
-              rewardType,
-              domainGrowth,
+              // Derivative data — the VALUE-ADD
+              principle: {
+                type: principle.type,
+                distilled: principle.distilled,
+              },
+              connections: connections.length > 0
+                ? connections.slice(0, 3).map((c) => ({
+                    insight: c.insight,
+                    sharedTags: c.sharedTags,
+                    relevance: c.relevanceScore,
+                  }))
+                : null,
+              knowledgeGaps: gaps.length > 0 ? gaps : null,
+              domainDepth: {
+                domain,
+                totalInDomain: domainCount,
+                topTopics: domainTopics,
+              },
+              flashCardsGenerated: cardsGenerated,
               milestone: milestone.hit ? milestone : null,
-              relatedInsights:
-                connections.length > 0
-                  ? connections.slice(0, 3).map((c) => ({
-                      insight: c.insight,
-                      sharedTags: c.sharedTags,
-                    }))
-                  : null,
-              message: (() => {
-                let msg = `Saved to your knowledge graph.`;
-                if (milestone.hit) {
-                  msg += ` 🏆 Milestone: ${milestone.message}`;
-                } else if (connections.length > 0 && connections[0].sharedTags.length >= 2) {
-                  msg += ` This connects to a past insight: "${connections[0].insight}" — you're building a pattern.`;
-                }
-                msg += ` ${domainGrowth.message}`;
-                if (streak.streakDays > 1) {
-                  msg += ` 🔥 ${streak.streakDays}-day streak.`;
-                }
-                return msg;
-              })(),
-              companionAppNote:
-                "A flash card from this insight has been added to your companion app for review.",
+              // Concise message for Claude to relay
+              message: responseMessage,
+              // Compounding hint — suggest related tools
+              compoundingHint: connections.length >= 3
+                ? "This user has many related saves. If they ask 'what do I know about [topic]?', use learntube_recall to synthesize."
+                : saveCount >= 10 && !milestone.hit
+                ? "Good save volume. If they seem curious about their growth, mention they can say 'how did I do?' for a reflection."
+                : null,
               ...(autoConnect ? { autoConnect } : {}),
               ...buildReminders(sessionKey),
             },
@@ -459,6 +455,181 @@ export async function handleBatchSave(args, extra) {
   } catch (error) {
     return {
       content: [{ type: "text", text: `Error in batch save: ${error.message}` }],
+      isError: true,
+    };
+  }
+}
+
+// ─── RECALL — Knowledge Synthesis Engine ────────────────
+// The user's personal knowledge retrieval system.
+// "What do I know about X?" triggers this. Claude CANNOT answer
+// from its own knowledge — it needs the user's personal saves.
+// Returns synthesized understanding, not just a list of saves.
+
+export async function handleRecall(args, extra) {
+  const userId = getUserId(extra, args);
+  const sessionKey = extra?.sessionId || "_default";
+  const autoConnect = await ensureConnected(sessionKey, userId);
+  recordToolCall(sessionKey, "recall");
+
+  try {
+    // ── 1. Multi-strategy search ──────────────────────
+    // Search by topic keywords + domain filter + tag matching
+    let saves = await searchSaves(userId, args.topic).catch(() => []);
+
+    // Also search by domain if provided
+    if (args.domain && saves.length < 5) {
+      const domainSaves = await getSaves(userId, { domain: args.domain, limit: 20 }).catch(() => []);
+      const seenIds = new Set(saves.map((s) => s.id));
+      for (const ds of domainSaves) {
+        if (!seenIds.has(ds.id)) {
+          // Check if this domain save is relevant to the topic
+          const topicWords = args.topic.toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
+          const insightText = (ds.insight || "").toLowerCase();
+          if (topicWords.some((w) => insightText.includes(w))) {
+            saves.push(ds);
+          }
+        }
+      }
+    }
+
+    // ── 2. Handle empty results ───────────────────────
+    if (saves.length === 0) {
+      const totalSaves = await getSaveCount(userId);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                found: false,
+                topic: args.topic,
+                totalSaves,
+                message: totalSaves === 0
+                  ? `You haven't saved any insights yet. As you work, say "save this" whenever a useful technique or idea comes up — I'll build your personal knowledge library.`
+                  : `No saved insights found for "${args.topic}". You have ${totalSaves} saves in other areas. Try a broader search term, or start building knowledge here by saving insights as they come up.`,
+                suggestion: "Save insights during your work sessions to build searchable knowledge. Each save gets processed into principles, connections, and flash cards.",
+                ...(autoConnect ? { autoConnect } : {}),
+                ...buildReminders(sessionKey),
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+
+    // ── 3. Synthesize knowledge ───────────────────────
+    const synthesis = synthesizeKnowledge(saves, args.topic);
+
+    // ── 4. Detect gaps for this topic ─────────────────
+    const allTags = [...new Set(saves.flatMap((s) => s.tags || []))];
+    const primaryDomain = saves[0]?.domain || args.domain || "general";
+    const gaps = await detectKnowledgeGaps(userId, primaryDomain, allTags);
+
+    // ── 5. Build growth trajectory ────────────────────
+    const growthNarrative = (() => {
+      if (synthesis.timeline.length <= 1) return null;
+      const first = synthesis.timeline[0];
+      const last = synthesis.timeline[synthesis.timeline.length - 1];
+      const daySpan = Math.floor(
+        (new Date(last.date) - new Date(first.date)) / (1000 * 60 * 60 * 24)
+      );
+      return {
+        firstSave: first.insight,
+        latestSave: last.insight,
+        daySpan,
+        saveCount: synthesis.timeline.length,
+        evolution: daySpan > 0
+          ? `Over ${daySpan} days, you've built ${synthesis.timeline.length} insights on this topic. Your understanding has evolved from "${first.principle.distilled.substring(0, 50)}..." to "${last.principle.distilled.substring(0, 50)}..."`
+          : `${synthesis.timeline.length} insights captured in the same session — building depth fast.`,
+      };
+    })();
+
+    // ── 6. Generate study guide suggestions ───────────
+    const studyGuide = [];
+    if (gaps.length > 0) {
+      studyGuide.push({
+        type: "explore_gap",
+        suggestion: `Explore ${gaps[0].topic} — it's adjacent to your ${gaps[0].relatedTo.join(", ")} knowledge.`,
+      });
+    }
+    if (synthesis.contradictions.length > 0) {
+      studyGuide.push({
+        type: "resolve_contradiction",
+        suggestion: `You have potentially conflicting insights about ${synthesis.contradictions[0].sharedTopic}. Worth examining which applies when.`,
+      });
+    }
+    if (synthesis.totalSaves >= 5 && synthesis.themes.length >= 3) {
+      studyGuide.push({
+        type: "synthesize",
+        suggestion: `You have ${synthesis.totalSaves} insights across ${synthesis.themes.length} themes. Consider distilling them into a personal framework.`,
+      });
+    }
+
+    // ── 7. Build response ─────────────────────────────
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              found: true,
+              topic: args.topic,
+              // Core synthesis
+              synthesis: {
+                totalSaves: synthesis.totalSaves,
+                domains: synthesis.domains,
+                themes: synthesis.themes,
+                // All insights for Claude to synthesize into a paragraph
+                insights: synthesis.insights.map((i) => ({
+                  text: i.insight,
+                  type: i.principle.type,
+                  distilled: i.principle.distilled,
+                  domain: i.domain,
+                  confidence: i.confidence,
+                  date: i.date,
+                })),
+              },
+              growthTrajectory: growthNarrative,
+              contradictions: synthesis.contradictions.length > 0
+                ? synthesis.contradictions
+                : null,
+              knowledgeGaps: gaps.length > 0 ? gaps : null,
+              studyGuide: studyGuide.length > 0 ? studyGuide : null,
+              // Instructions for Claude
+              instructions: `Present this as the user's PERSONAL knowledge synthesis on "${args.topic}". Weave their ${synthesis.totalSaves} saved insights into a coherent paragraph showing what they know. ${
+                synthesis.contradictions.length > 0
+                  ? "Flag the contradiction — it's a learning opportunity."
+                  : ""
+              } ${
+                gaps.length > 0
+                  ? `Mention the gap in ${gaps[0].topic} as a natural next area to explore.`
+                  : ""
+              } ${
+                growthNarrative
+                  ? "Show how their understanding has evolved over time."
+                  : ""
+              } End with study guide suggestions if any. This is THEIR knowledge, not yours — present it as such.`,
+              // Compounding hints
+              compoundingHint: synthesis.totalSaves >= 3
+                ? "The user has solid knowledge here. If they want to test it, suggest 'test me on [topic]' or 'quiz me'. If they want to improve, suggest 'help me learn more about [topic]'."
+                : null,
+              ...(autoConnect ? { autoConnect } : {}),
+              ...buildReminders(sessionKey),
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  } catch (error) {
+    return {
+      content: [
+        { type: "text", text: `Error in recall: ${error.message}` },
+      ],
       isError: true,
     };
   }
@@ -618,6 +789,277 @@ function inferDomain(insight, tags) {
   return "general";
 }
 
+// ─── DERIVATIVE PROCESSING ENGINE ──────────────────────────
+// Transforms raw saves into high-value knowledge atoms.
+// Every save triggers: principle extraction, connection finding,
+// gap detection, and multi-type flash card generation.
+
+/**
+ * Extract the principle type and distilled version from an insight.
+ * Categorizes the insight so the knowledge graph has structure.
+ */
+function extractPrinciple(insight) {
+  const text = insight.toLowerCase();
+
+  const typeSignals = {
+    framework: ["framework", "model", "structure", "system", "approach", "methodology", "steps", "phases", "matrix"],
+    technique: ["technique", "method", "trick", "tactic", "hack", "way to", "how to", "strategy for", "tip"],
+    mental_model: ["mental model", "lens", "perspective", "way of thinking", "paradigm", "worldview", "analogy"],
+    heuristic: ["rule of thumb", "heuristic", "guideline", "principle", "always", "never", "rule"],
+    pattern: ["pattern", "recurring", "tendency", "common", "typical", "often", "usually"],
+    anti_pattern: ["avoid", "don't", "mistake", "pitfall", "trap", "anti-pattern", "wrong", "bad practice", "red flag"],
+    tool_tip: ["tool", "shortcut", "setting", "feature", "plugin", "extension", "config", "command"],
+    concept: ["concept", "idea", "theory", "notion", "understanding", "definition"],
+  };
+
+  let principleType = "insight";
+  for (const [type, signals] of Object.entries(typeSignals)) {
+    if (signals.some((s) => text.includes(s))) {
+      principleType = type;
+      break;
+    }
+  }
+
+  // Distill: extract the core reusable statement
+  const firstSentence = insight.match(/^[^.!?]+[.!?]/);
+  const distilled = firstSentence
+    ? firstSentence[0].trim()
+    : insight.substring(0, 150).trim() + (insight.length > 150 ? "..." : "");
+
+  return { type: principleType, distilled };
+}
+
+/**
+ * Find deep connections between this save and existing saves.
+ * Goes beyond tag overlap — keyword matching in insight text + relevance scoring.
+ */
+async function findDeepConnections(userId, insight, tags, excludeId) {
+  const stopWords = new Set([
+    "this", "that", "with", "from", "have", "been", "will", "would", "could",
+    "should", "about", "their", "there", "which", "when", "what", "your",
+    "more", "also", "just", "some", "than", "them", "into", "very", "each",
+    "most", "such", "then", "like", "other", "make", "made", "does", "doing",
+    "using", "used", "being", "were", "they", "these", "those", "only",
+  ]);
+
+  const keywords = insight
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !stopWords.has(w));
+
+  // Search by keywords
+  const searchTerms = keywords.slice(0, 5).join(" ");
+  let keywordMatches = [];
+  if (searchTerms.length > 0) {
+    keywordMatches = await searchSaves(userId, searchTerms).catch(() => []);
+  }
+
+  // Search by tag overlap
+  let tagMatches = [];
+  if (tags && tags.length > 0) {
+    tagMatches = await getSaves(userId, { tags, limit: 10 }).catch(() => []);
+  }
+
+  // Merge, deduplicate, score by relevance
+  const seen = new Set();
+  if (excludeId) seen.add(excludeId);
+
+  const scored = [];
+  for (const save of [...keywordMatches, ...tagMatches]) {
+    if (seen.has(save.id)) continue;
+    seen.add(save.id);
+
+    const saveText = (save.insight || "").toLowerCase();
+    const keywordHits = keywords.filter((k) => saveText.includes(k)).length;
+    const tagHits = (save.tags || []).filter((t) => tags.includes(t)).length;
+    const daysSince = Math.floor(
+      (Date.now() - new Date(save.created_at).getTime()) / (1000 * 60 * 60 * 24)
+    );
+    const recencyBonus = daysSince < 7 ? 0.5 : daysSince < 30 ? 0.2 : 0;
+    const relevanceScore = keywordHits * 0.3 + tagHits * 0.5 + recencyBonus;
+
+    if (relevanceScore > 0.2) {
+      scored.push({
+        id: save.id,
+        insight: save.insight.substring(0, 120),
+        domain: save.domain,
+        tags: save.tags,
+        sharedTags: (save.tags || []).filter((t) => tags.includes(t)),
+        relevanceScore: Math.round(relevanceScore * 100) / 100,
+        savedAt: save.created_at,
+      });
+    }
+  }
+
+  scored.sort((a, b) => b.relevanceScore - a.relevanceScore);
+  return scored.slice(0, 5);
+}
+
+/**
+ * Detect knowledge gaps — adjacent topics the user hasn't explored.
+ */
+async function detectKnowledgeGaps(userId, domain, tags) {
+  const allSaves = await getSaves(userId, { limit: 100 }).catch(() => []);
+
+  const tagFreq = {};
+  allSaves.forEach((s) => {
+    (s.tags || []).forEach((t) => {
+      tagFreq[t] = (tagFreq[t] || 0) + 1;
+    });
+  });
+
+  const adjacencyMap = {
+    marketing: ["copywriting", "analytics", "seo", "content", "brand", "conversion", "growth"],
+    product: ["ux", "analytics", "strategy", "research", "prioritization", "roadmap", "metrics"],
+    engineering: ["architecture", "testing", "deployment", "security", "performance", "api", "database"],
+    strategy: ["competitive-analysis", "pricing", "positioning", "market-research", "business-model"],
+    ai: ["prompting", "evaluation", "workflow", "automation", "agents", "fine-tuning"],
+    leadership: ["delegation", "feedback", "hiring", "culture", "coaching", "communication"],
+    writing: ["storytelling", "editing", "structure", "voice", "persuasion", "clarity"],
+    data: ["visualization", "analysis", "statistics", "dashboards", "metrics", "experimentation"],
+  };
+
+  const adjacentTopics = new Set();
+  for (const tag of tags) {
+    (adjacencyMap[tag] || []).forEach((a) => adjacentTopics.add(a));
+  }
+  const domainBase = domain?.split("-")[0] || "";
+  (adjacencyMap[domainBase] || []).forEach((a) => adjacentTopics.add(a));
+
+  const gaps = [];
+  for (const topic of adjacentTopics) {
+    if (!tags.includes(topic) && (!tagFreq[topic] || tagFreq[topic] < 2)) {
+      gaps.push({
+        topic,
+        currentSaves: tagFreq[topic] || 0,
+        relatedTo: tags.filter((t) => (adjacencyMap[t] || []).includes(topic)),
+      });
+    }
+  }
+
+  gaps.sort((a, b) => b.relatedTo.length - a.relatedTo.length);
+  return gaps.slice(0, 3);
+}
+
+/**
+ * Generate multiple flash card types from a save.
+ * Application, retrieval, and connection cards.
+ */
+function generateFlashCards(insight, principle, connections, context, domain) {
+  const cards = [];
+  const preview = insight.substring(0, 80);
+
+  // Card 1: Application card (always)
+  cards.push({
+    type: "application",
+    front: context
+      ? `You were working on ${context.substring(0, 60)}. What key approach would you apply again?`
+      : `How would you apply this in your next ${(domain || "work").replace(/-/g, " ")} task: "${preview}..."?`,
+    back: insight,
+  });
+
+  // Card 2: Retrieval card (if insight is substantial)
+  if (insight.length > 50) {
+    cards.push({
+      type: "retrieval",
+      front: `What ${principle.type} did you learn related to "${preview.substring(0, 40)}..."?`,
+      back: principle.distilled,
+    });
+  }
+
+  // Card 3: Connection card (if connections found)
+  if (connections.length > 0) {
+    cards.push({
+      type: "connection",
+      front: `How does "${preview.substring(0, 50)}..." connect to: "${connections[0].insight.substring(0, 50)}..."?`,
+      back: `Both relate to ${connections[0].sharedTags.join(", ") || domain}. Look for the underlying pattern.`,
+    });
+  }
+
+  return cards;
+}
+
+/**
+ * Synthesize a user's knowledge on a topic from their saves.
+ * Used by handleRecall to build a "current understanding" paragraph.
+ */
+function synthesizeKnowledge(saves, topic) {
+  if (saves.length === 0) {
+    return { summary: null, themes: [], timeline: [] };
+  }
+
+  // Group by domain
+  const byDomain = {};
+  saves.forEach((s) => {
+    const d = s.domain || "general";
+    if (!byDomain[d]) byDomain[d] = [];
+    byDomain[d].push(s);
+  });
+
+  // Extract themes from tags
+  const tagFreq = {};
+  saves.forEach((s) => {
+    (s.tags || []).forEach((t) => {
+      tagFreq[t] = (tagFreq[t] || 0) + 1;
+    });
+  });
+  const themes = Object.entries(tagFreq)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([tag, count]) => ({ tag, count }));
+
+  // Build timeline (how understanding evolved)
+  const sorted = [...saves].sort(
+    (a, b) => new Date(a.created_at) - new Date(b.created_at)
+  );
+  const timeline = sorted.map((s) => ({
+    insight: s.insight.substring(0, 100),
+    date: s.created_at,
+    domain: s.domain,
+    principle: extractPrinciple(s.insight),
+  }));
+
+  // Detect potential contradictions (saves with overlapping topics but different principles)
+  const contradictions = [];
+  for (let i = 0; i < saves.length; i++) {
+    for (let j = i + 1; j < saves.length; j++) {
+      const a = saves[i].insight.toLowerCase();
+      const b = saves[j].insight.toLowerCase();
+      // Simple heuristic: look for negation patterns
+      const negators = ["don't", "avoid", "never", "instead of", "not", "wrong", "mistake"];
+      const aHasNeg = negators.some((n) => a.includes(n));
+      const bHasNeg = negators.some((n) => b.includes(n));
+      const sharedTags = (saves[i].tags || []).filter((t) =>
+        (saves[j].tags || []).includes(t)
+      );
+      if (aHasNeg !== bHasNeg && sharedTags.length >= 1) {
+        contradictions.push({
+          save1: saves[i].insight.substring(0, 80),
+          save2: saves[j].insight.substring(0, 80),
+          sharedTopic: sharedTags.join(", "),
+        });
+      }
+    }
+  }
+
+  return {
+    totalSaves: saves.length,
+    domains: Object.keys(byDomain),
+    themes,
+    timeline,
+    contradictions: contradictions.slice(0, 3),
+    insights: saves.map((s) => ({
+      insight: s.insight,
+      domain: s.domain,
+      tags: s.tags,
+      confidence: s.confidence_score,
+      date: s.created_at,
+      principle: extractPrinciple(s.insight),
+    })),
+  };
+}
+
 // ─── BEHAVIORAL OBSERVATION SCORING ─────────────────────
 // Applies ability signals from behavioral observation to user scores.
 // Uses a softer EMA (alpha=0.15) than explicit evaluations (0.3)
@@ -727,6 +1169,56 @@ export async function handleElevate(args, extra) {
     const level = args.user_level_estimate;
     const levelInfo = LEVELS[level] || LEVELS[0];
 
+    // ── Cross-Session Pattern Detection ──────────────
+    // Compare this evaluation against previous ones to find
+    // recurring strengths and persistent gaps.
+    let crossSessionPatterns = null;
+    try {
+      const history = await getAbilityProgress(userId);
+      if (history.length >= 2) {
+        // Find abilities that consistently score low across sessions
+        const abilityTotals = {};
+        const abilityCounts = {};
+        for (const h of history) {
+          for (const [key, score] of Object.entries(h.ability_scores || {})) {
+            if (score !== null && score !== undefined) {
+              abilityTotals[key] = (abilityTotals[key] || 0) + score;
+              abilityCounts[key] = (abilityCounts[key] || 0) + 1;
+            }
+          }
+        }
+        const persistentGaps = [];
+        const consistentStrengths = [];
+        for (const [key, total] of Object.entries(abilityTotals)) {
+          const avg = total / abilityCounts[key];
+          if (avg < 2.5 && abilityCounts[key] >= 2 && ABILITIES[key]) {
+            persistentGaps.push({ ability: ABILITIES[key].shortName, avgScore: Math.round(avg * 10) / 10, sessions: abilityCounts[key] });
+          }
+          if (avg >= 4 && abilityCounts[key] >= 2 && ABILITIES[key]) {
+            consistentStrengths.push({ ability: ABILITIES[key].shortName, avgScore: Math.round(avg * 10) / 10, sessions: abilityCounts[key] });
+          }
+        }
+        if (persistentGaps.length > 0 || consistentStrengths.length > 0) {
+          crossSessionPatterns = { persistentGaps, consistentStrengths, totalEvaluations: history.length };
+        }
+      }
+    } catch (e) { /* non-critical */ }
+
+    // ── Auto-Save Session Insights ───────────────────
+    // Extract reusable insights from the evaluation itself
+    try {
+      if (args.level_up_move) {
+        await createSave({
+          userId,
+          insight: `AI skill growth area: ${args.level_up_move}`,
+          tags: ["self-improvement", "ai-skills", "reflection"],
+          domain: args.domain,
+          context: `From self-evaluation on ${args.task_description.substring(0, 60)}`,
+          confidence: 4,
+        });
+      }
+    } catch (e) { /* non-critical */ }
+
     // Build the ability radar with threshold proximity detection
     const abilityRadar = {};
     let weakestAbility = null;
@@ -831,6 +1323,7 @@ export async function handleElevate(args, extra) {
                 totalElevates: userScore?.total_elevates || 1,
                 runningAbilities: userScore?.abilities || {},
               },
+              crossSessionPatterns,
               nextAction,
               companionApp: {
                 pendingItems: queueCount,
@@ -1070,6 +1563,29 @@ export async function handleSharpen(args, extra) {
       };
     }
 
+    // ── Topic-Based Learning Context ─────────────────
+    // When the user says "help me learn X", fetch their existing
+    // saves on the topic to make the exercise contextually relevant.
+    let topicContext = null;
+    if (args.learning_topic) {
+      try {
+        const topicSaves = await searchSaves(userId, args.learning_topic).catch(() => []);
+        const topicGaps = await detectKnowledgeGaps(
+          userId,
+          args.domain || "general",
+          topicSaves.flatMap((s) => s.tags || [])
+        );
+        topicContext = {
+          existingSaves: topicSaves.length,
+          knownInsights: topicSaves.slice(0, 3).map((s) => s.insight.substring(0, 80)),
+          gaps: topicGaps.slice(0, 2).map((g) => g.topic),
+          instruction: topicSaves.length > 0
+            ? `The user already knows: ${topicSaves.slice(0, 2).map((s) => '"' + s.insight.substring(0, 50) + '..."').join(", ")}. Build the exercise to push BEYOND what they already know.`
+            : `This is a new topic for the user. Start with foundational exercises.`,
+        };
+      } catch (e) { /* non-critical */ }
+    }
+
     // If this is a submission (has user_response + score), record and score it
     if (args.user_response && args.score !== undefined) {
       const streak = await updateStreak(userId);
@@ -1213,10 +1729,13 @@ export async function handleSharpen(args, extra) {
                 type: args.exercise_type,
                 content: args.exercise_content,
                 domain: args.domain,
+                learningTopic: args.learning_topic || null,
                 timeLimit: "60 seconds",
               },
+              topicContext,
               instructions:
-                "Exercise loaded. Present this to the user and have them work through it. Then call sharpen again with their response for scoring. If they skip, it's already queued in their companion app for later.",
+                "Exercise loaded. Present this to the user and have them work through it. Then call sharpen again with their response for scoring. If they skip, it's already queued in their companion app for later." +
+                (topicContext ? ` ${topicContext.instruction}` : ""),
               ...(autoConnect ? { autoConnect } : {}),
               ...buildReminders(sessionKey),
             },

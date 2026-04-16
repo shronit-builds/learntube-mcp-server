@@ -809,13 +809,15 @@ function inferDomain(insight, tags) {
 function extractPrinciple(insight) {
   const text = insight.toLowerCase();
 
+  // Order matters: more specific types first (anti_pattern before heuristic,
+  // since "avoid X, always do Y" should classify as anti_pattern not heuristic)
   const typeSignals = {
     framework: ["framework", "model", "structure", "system", "approach", "methodology", "steps", "phases", "matrix"],
     technique: ["technique", "method", "trick", "tactic", "hack", "way to", "how to", "strategy for", "tip"],
     mental_model: ["mental model", "lens", "perspective", "way of thinking", "paradigm", "worldview", "analogy"],
+    anti_pattern: ["avoid", "don't", "mistake", "pitfall", "trap", "anti-pattern", "wrong", "bad practice", "red flag"],
     heuristic: ["rule of thumb", "heuristic", "guideline", "principle", "always", "never", "rule"],
     pattern: ["pattern", "recurring", "tendency", "common", "typical", "often", "usually"],
-    anti_pattern: ["avoid", "don't", "mistake", "pitfall", "trap", "anti-pattern", "wrong", "bad practice", "red flag"],
     tool_tip: ["tool", "shortcut", "setting", "feature", "plugin", "extension", "config", "command"],
     concept: ["concept", "idea", "theory", "notion", "understanding", "definition"],
   };

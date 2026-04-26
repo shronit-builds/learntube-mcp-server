@@ -1,6 +1,6 @@
 {
   "name": "learntube-ai-readiness-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "LearnTube AI Readiness MCP Server — personal AI knowledge library with save, recall, reflect, prove, and sharpen tools",
   "type": "module",
   "main": "src/index.js",
